@@ -1,0 +1,54 @@
+import type { AreaSummary } from "../../geometry";
+import type { BomLine, CostSummary, CutPlanResult, DeckLevel, LabourItem, MaterialLibrary, Project, ValidationIssue } from "../../types";
+import type { ViewMode } from "../../store/projectStore";
+import { DeckPropertiesPanel } from "./DeckPropertiesPanel";
+import { StructurePanel } from "./StructurePanel";
+import { MaterialsPanel } from "./MaterialsPanel";
+import { CostsPanel } from "./CostsPanel";
+
+interface Props {
+  viewMode: ViewMode;
+  project: Project;
+  level: DeckLevel;
+  library: MaterialLibrary;
+  area: AreaSummary;
+  validation: ValidationIssue[];
+  jointCount: { joists: number; beams: number; footings: number; posts: number };
+  bomLines: BomLine[];
+  cutPlans: CutPlanResult[];
+  costs: CostSummary;
+  labourItems: LabourItem[];
+  onUpdateLevel: (fn: (level: DeckLevel) => DeckLevel) => void;
+  onUpdateProject: (fn: (project: Project) => Project) => void;
+  onToggleClientSupplied: (materialId: string) => void;
+}
+
+export function RightPanel(props: Props) {
+  return (
+    <div className="no-print h-full w-80 shrink-0 overflow-hidden border-l border-slate-300 bg-white">
+      {props.viewMode === "terrass" && (
+        <DeckPropertiesPanel level={props.level} library={props.library} area={props.area} onUpdate={props.onUpdateLevel} />
+      )}
+      {props.viewMode === "struktur" && (
+        <StructurePanel
+          level={props.level}
+          library={props.library}
+          validation={props.validation}
+          jointCount={props.jointCount}
+          onUpdate={props.onUpdateLevel}
+        />
+      )}
+      {props.viewMode === "material" && (
+        <MaterialsPanel
+          bomLines={props.bomLines}
+          cutPlans={props.cutPlans}
+          clientSuppliedMaterialIds={props.project.clientSuppliedMaterialIds}
+          onToggleClientSupplied={props.onToggleClientSupplied}
+        />
+      )}
+      {props.viewMode === "kostnad" && (
+        <CostsPanel project={props.project} costs={props.costs} labourItems={props.labourItems} onUpdateProject={props.onUpdateProject} />
+      )}
+    </div>
+  );
+}
