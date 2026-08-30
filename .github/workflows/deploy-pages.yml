@@ -50,6 +50,11 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+        with:
+          # Try to enable Pages (source: GitHub Actions) automatically if
+          # it isn't already — falls back to the clear error below (with
+          # the manual Settings steps) if the token lacks permission to.
+          enablement: true
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
