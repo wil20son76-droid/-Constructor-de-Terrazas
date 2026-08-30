@@ -49,6 +49,7 @@ export function RightPanel(props: Props) {
           cutPlans={props.cutPlans}
           clientSuppliedMaterialIds={props.project.clientSuppliedMaterialIds}
           onToggleClientSupplied={props.onToggleClientSupplied}
+          validation={props.validation}
         />
       )}
       {props.viewMode === "kostnad" && (
