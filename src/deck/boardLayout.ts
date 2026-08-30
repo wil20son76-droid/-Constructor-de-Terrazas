@@ -6,7 +6,7 @@
  * narrower/cut row is needed) and then the actual board segments per row,
  * clipped to the polygon. Everything is in millimetres.
  */
-import type { BoardDirection, DeckBoard, DeckOpening, DeckPolygon } from "../types";
+import type { BoardDirection, DeckBoard, DeckOpening, DeckPolygon, DeckSection } from "../types";
 import { makeId } from "../geometry";
 import { clipRowsToPolygon, rotatedBoundingBox } from "../structural/memberLayout";
 
@@ -116,4 +116,36 @@ export function computeBoardLayout(
     lastRowWidthMm: lastEntry.widthMm,
     lastRowNeedsCut: lastEntry.isCut,
   };
+}
+
+/**
+ * Compute the real, clipped board layout for ONE trall section — each
+ * section is an independent polygon with its own board direction and
+ * material, e.g. a 45° section meeting a 0° section around a corner.
+ * Boards are tagged with `sectionId`/`materialId` so the BOM can group
+ * them correctly even when different sections use different materials.
+ *
+ * Sections currently don't carry their own openings (holes) — a section
+ * is assumed to be a solid subpolygon of the level, per `DELA SEKTION`.
+ */
+export function computeSectionBoardLayout(section: DeckSection): BoardLayoutResult & { boards: DeckBoard[] } {
+  const openings: DeckOpening[] = [];
+  const result = computeBoardLayout(section.polygon, openings, section.boardDirection, section.boardWidthMm, section.boardGap);
+  const boards: DeckBoard[] = result.boards.map((b) => ({ ...b, sectionId: section.id, materialId: section.materialId }));
+  return { ...result, boards };
+}
+
+/**
+ * Compute board layouts for every section of a level and combine them
+ * into one flat board array (each board still tagged with its
+ * `sectionId`/`materialId`) plus the per-section breakdown, for the BOM
+ * and the plan view.
+ */
+export function computeAllSectionsBoardLayout(sections: DeckSection[]): {
+  boards: DeckBoard[];
+  bySection: { section: DeckSection; layout: BoardLayoutResult }[];
+} {
+  const bySection = sections.map((section) => ({ section, layout: computeSectionBoardLayout(section) }));
+  const boards = bySection.flatMap((s) => s.layout.boards);
+  return { boards, bySection };
 }

@@ -14,13 +14,14 @@ import type {
   CutPlanResult,
   DeckBoard,
   DeckLevel,
+  DeckSection,
   Footing,
   Joist,
   MaterialLibrary,
   Post,
 } from "../types";
 import { computeAreaSummary } from "../geometry";
-import { computeBoardLayout, type BoardLayoutResult } from "../deck/boardLayout";
+import { computeAllSectionsBoardLayout, computeBoardLayout, type BoardLayoutResult } from "../deck/boardLayout";
 import { classifyEdges, filterEdgeBoardEligible } from "../deck/edgeClassification";
 import {
   computeBarlinor,
@@ -38,7 +39,18 @@ import { computeCutPlan } from "./cutOptimization";
 
 export interface LevelGeometryResult {
   boards: DeckBoard[];
+  /**
+   * Legacy single-polygon board layout. When `level.sections` is empty this
+   * is the real, only layout. When sections are active, `rowCount` and
+   * `totalLinearMm` are the sums across all sections (still meaningful, e.g.
+   * for a total-linear-metres display), but `effectiveWidthMm`/
+   * `lastRowWidthMm`/`lastRowNeedsCut` don't have a single-polygon meaning
+   * across independently-angled sections, so they are reported as
+   * 0/0/false; use `sectionLayouts` for the real per-section breakdown.
+   */
   boardLayout: BoardLayoutResult;
+  /** Per-section board layout, populated only when `level.sections` is non-empty. */
+  sectionLayouts?: { section: DeckSection; layout: BoardLayoutResult }[];
   joists: Joist[];
   regelCcInfo: UniformSpacingResult;
   beams: Beam[];
@@ -58,7 +70,28 @@ function findMaterial(library: MaterialLibrary, id: string) {
 export function computeLevelGeometry(level: DeckLevel, library: MaterialLibrary): LevelGeometryResult {
   const trallMaterial = findMaterial(library, level.trallMaterialId);
   const boardWidthMm = trallMaterial?.widthMm ?? 120;
-  const boardLayout = computeBoardLayout(level.polygon, level.openings, level.boardDirection, boardWidthMm, level.boardGap);
+
+  const hasSections = !!level.sections && level.sections.length > 0;
+  let boards: DeckBoard[];
+  let boardLayout: BoardLayoutResult;
+  let sectionLayouts: { section: DeckSection; layout: BoardLayoutResult }[] | undefined;
+
+  if (hasSections) {
+    const { boards: sectionBoards, bySection } = computeAllSectionsBoardLayout(level.sections!);
+    boards = sectionBoards;
+    sectionLayouts = bySection;
+    boardLayout = {
+      boards: sectionBoards,
+      rowCount: bySection.reduce((sum, s) => sum + s.layout.rowCount, 0),
+      totalLinearMm: bySection.reduce((sum, s) => sum + s.layout.totalLinearMm, 0),
+      effectiveWidthMm: 0,
+      lastRowWidthMm: 0,
+      lastRowNeedsCut: false,
+    };
+  } else {
+    boardLayout = computeBoardLayout(level.polygon, level.openings, level.boardDirection, boardWidthMm, level.boardGap);
+    boards = boardLayout.boards;
+  }
 
   const { joists, ccInfo: regelCcInfo } = computeReglar(level, library);
   const { beams, spacingInfo: barlinaSpacingInfo } = computeBarlinor(level, library);
@@ -83,8 +116,9 @@ export function computeLevelGeometry(level: DeckLevel, library: MaterialLibrary)
   }));
 
   return {
-    boards: boardLayout.boards,
+    boards,
     boardLayout,
+    sectionLayouts,
     joists,
     regelCcInfo,
     beams,
@@ -96,6 +130,27 @@ export function computeLevelGeometry(level: DeckLevel, library: MaterialLibrary)
     postHeightMm,
     stairs,
   };
+}
+
+/**
+ * Group boards by their own `materialId` (set per-section by
+ * `computeSectionBoardLayout`), falling back to the level's single
+ * `trallMaterialId` for boards with no tag — i.e. every board in the legacy
+ * (no-sections) path, which always produces exactly one group and therefore
+ * the exact same single TRALL BOM line as before this feature existed.
+ */
+function groupTrallBoardsByMaterial(boards: DeckBoard[], fallbackMaterialId: string): Map<string, DeckBoard[]> {
+  const map = new Map<string, DeckBoard[]>();
+  for (const board of boards) {
+    const materialId = board.materialId ?? fallbackMaterialId;
+    const list = map.get(materialId);
+    if (list) {
+      list.push(board);
+    } else {
+      map.set(materialId, [board]);
+    }
+  }
+  return map;
 }
 
 function purchaseUnitCount(quantity: number, unitsPerPackage?: number): number {
@@ -186,16 +241,19 @@ export function computeLevelBom(
   const cutPlans: CutPlanResult[] = [];
   const suppliedBy = (id: string) => clientSuppliedMaterialIds.includes(id);
 
-  const trall = makeLumberBomLine(
-    library,
-    level.trallMaterialId,
-    "TRALL",
-    geometry.boards.map((b) => b.lengthMm),
-    suppliedBy(level.trallMaterialId),
-  );
-  if (trall) {
-    bomLines.push(trall.line);
-    cutPlans.push(trall.cutPlan);
+  const trallGroups = groupTrallBoardsByMaterial(geometry.boards, level.trallMaterialId);
+  for (const [materialId, boards] of trallGroups) {
+    const trall = makeLumberBomLine(
+      library,
+      materialId,
+      "TRALL",
+      boards.map((b) => b.lengthMm),
+      suppliedBy(materialId),
+    );
+    if (trall) {
+      bomLines.push(trall.line);
+      cutPlans.push(trall.cutPlan);
+    }
   }
 
   const regel = makeLumberBomLine(

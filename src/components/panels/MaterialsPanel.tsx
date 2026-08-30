@@ -1,4 +1,4 @@
-import type { BomGroup, BomLine, CutPlanResult } from "../../types";
+import type { BomGroup, BomLine, CutPlanResult, ValidationIssue } from "../../types";
 import { formatMeters, formatSek } from "../../utils/format";
 import { Section } from "./common";
 
@@ -7,6 +7,7 @@ interface Props {
   cutPlans: CutPlanResult[];
   clientSuppliedMaterialIds: string[];
   onToggleClientSupplied: (materialId: string) => void;
+  validation: ValidationIssue[];
 }
 
 const groupOrder: BomGroup[] = ["TRALL", "STOMME", "PLINTAR", "INFASTNING", "TRAPPA", "OVRIGT"];
@@ -19,8 +20,25 @@ const groupLabels: Record<BomGroup, string> = {
   OVRIGT: "Övrigt",
 };
 
-export function MaterialsPanel({ bomLines, cutPlans, clientSuppliedMaterialIds, onToggleClientSupplied }: Props) {
+export function MaterialsPanel({ bomLines, cutPlans, clientSuppliedMaterialIds, onToggleClientSupplied, validation }: Props) {
   const total = bomLines.filter((l) => !l.suppliedByClient).reduce((s, l) => s + l.purchaseTotal, 0);
+  const errors = validation.filter((v) => v.severity === "error");
+
+  if (errors.length > 0) {
+    return (
+      <div className="h-full overflow-y-auto p-3">
+        <div className="rounded bg-red-50 p-3 text-sm text-red-800">
+          <p className="font-semibold">Materialberäkningen visas inte — formen är ogiltig.</p>
+          <ul className="mt-2 list-disc space-y-1 pl-4 text-xs">
+            {errors.map((e) => (
+              <li key={e.id}>{e.message}</li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs">Rätta formen (se fliken Vista terrass/struktur) innan materialåtgången kan litas på.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="h-full overflow-y-auto">
@@ -72,8 +90,8 @@ export function MaterialsPanel({ bomLines, cutPlans, clientSuppliedMaterialIds, 
 
       <Section title="Kapoptimering">
         <ul className="space-y-1 text-xs text-slate-600">
-          {cutPlans.map((plan) => (
-            <li key={plan.materialId}>
+          {cutPlans.map((plan, i) => (
+            <li key={`${plan.materialId}-${i}`}>
               {plan.materialId}: teknisk {formatMeters(plan.requiredLengthMm / 1000)} ({plan.piecesCount} st,{" "}
               {plan.segmentsCount} segment{plan.spliceCount > 0 ? `, ${plan.spliceCount} skarvade` : ""}) → inköp{" "}
               {plan.purchasedBreakdown.map((g) => `${g.count} x ${(g.lengthMm / 1000).toFixed(1)} m`).join(" + ")} ={" "}

@@ -10,7 +10,7 @@
  * should surface next to any validation results.
  */
 import type { CutPlanResult, DeckLevel, MaterialLibrary, ValidationIssue } from "../types";
-import { makeId } from "../geometry";
+import { makeId, validatePolygon } from "../geometry";
 import type { LevelGeometryResult } from "../materials";
 
 export const STRUCTURAL_DISCLAIMER =
@@ -28,6 +28,21 @@ export function validateLevel(
   const issues: ValidationIssue[] = [];
   const warn = (message: string) => issues.push({ id: makeId("issue"), severity: "warning", message });
   const error = (message: string) => issues.push({ id: makeId("issue"), severity: "error", message });
+
+  // Geometry: a self-intersecting, zero-area or otherwise broken shape
+  // makes every downstream calculation meaningless, so this is checked
+  // first and blocks trusting the BOM (see App.tsx/MaterialsPanel, which
+  // hide the material list while any error-severity issue is present).
+  for (const issue of validatePolygon(level.polygon.points)) {
+    if (issue.severity === "error") error(`Formens geometri: ${issue.message}`);
+    else warn(`Formens geometri: ${issue.message}`);
+  }
+  for (const section of level.sections ?? []) {
+    for (const issue of validatePolygon(section.polygon.points)) {
+      if (issue.severity === "error") error(`${section.name}: ${issue.message}`);
+      else warn(`${section.name}: ${issue.message}`);
+    }
+  }
 
   const trallMaterial = library.materials.find((m) => m.id === level.trallMaterialId);
   if (trallMaterial?.recommendedRegelSpacingMm && level.regelSpacing > trallMaterial.recommendedRegelSpacingMm) {
