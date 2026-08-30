@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   computeAreaSummary,
+  computeStairPlacementRect,
   editEdgeLength,
   findDuplicatePointIndices,
   findTinyEdgeIndices,
@@ -12,6 +13,7 @@ import {
   polygonSelfIntersects,
   rectanglePolygon,
   resizeRectangleEdge,
+  signedArea,
   snapToGrid,
   splitPolygon,
   validatePolygon,
@@ -220,6 +222,57 @@ describe("validatePolygon", () => {
     const issues = validatePolygon(points);
     expect(issues.every((i) => i.severity === "warning")).toBe(true);
     expect(issues.length).toBe(2); // one duplicate-point warning, one tiny-edge warning
+  });
+});
+
+describe("signedArea", () => {
+  it("is positive for the standard rectanglePolygon winding (196,000,000 for 14000x7000)", () => {
+    const poly = rectanglePolygon(14000, 7000);
+    expect(signedArea(poly.points)).toBe(196_000_000);
+  });
+
+  it("flips sign when the winding is reversed", () => {
+    const poly = rectanglePolygon(14000, 7000);
+    const reversed = [...poly.points].reverse();
+    expect(signedArea(reversed)).toBe(-196_000_000);
+  });
+});
+
+describe("computeStairPlacementRect", () => {
+  it("places a stair on the top edge (0,0)->(14000,0), centred and pointing outward (-y)", () => {
+    // Hand derivation: edge dir (1,0); outward = (0,-1) since signedArea>=0;
+    // mid=(7000,0); width 2000 -> half 1000; run 3000.
+    const poly = rectanglePolygon(14000, 7000);
+    const rect = computeStairPlacementRect(poly.points, 0, 2000, 3000);
+    expect(rect).toEqual([
+      { x: 6000, y: 0 },
+      { x: 8000, y: 0 },
+      { x: 8000, y: -3000 },
+      { x: 6000, y: -3000 },
+    ]);
+  });
+
+  it("places a stair on the right edge (14000,0)->(14000,7000), pointing outward (+x)", () => {
+    // Hand derivation: edge dir (0,1); outward = (1,0); mid=(14000,3500);
+    // width 1000 -> half 500; run 1500.
+    const poly = rectanglePolygon(14000, 7000);
+    const rect = computeStairPlacementRect(poly.points, 1, 1000, 1500);
+    expect(rect).toEqual([
+      { x: 14000, y: 3000 },
+      { x: 14000, y: 4000 },
+      { x: 15500, y: 4000 },
+      { x: 15500, y: 3000 },
+    ]);
+  });
+
+  it("always points away from the interior, even when the polygon winding is reversed", () => {
+    const poly = rectanglePolygon(14000, 7000);
+    const reversedPoints = [...poly.points].reverse(); // [(0,7000),(14000,7000),(14000,0),(0,0)]
+    // Edge 0 of the reversed list is (0,7000)->(14000,7000) — the BOTTOM edge this time.
+    const rect = computeStairPlacementRect(reversedPoints, 0, 2000, 1000);
+    // Outward from the bottom edge must point away from the interior, i.e. +y (further down/out), not -y (back into the shape).
+    expect(rect[2].y).toBeGreaterThan(7000);
+    expect(rect[3].y).toBeGreaterThan(7000);
   });
 });
 

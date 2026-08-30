@@ -90,8 +90,8 @@ export function MaterialsPanel({ bomLines, cutPlans, clientSuppliedMaterialIds, 
 
       <Section title="Kapoptimering">
         <ul className="space-y-1 text-xs text-slate-600">
-          {cutPlans.map((plan) => (
-            <li key={plan.materialId}>
+          {cutPlans.map((plan, i) => (
+            <li key={`${plan.materialId}-${i}`}>
               {plan.materialId}: teknisk {formatMeters(plan.requiredLengthMm / 1000)} ({plan.piecesCount} st,{" "}
               {plan.segmentsCount} segment{plan.spliceCount > 0 ? `, ${plan.spliceCount} skarvade` : ""}) → inköp{" "}
               {plan.purchasedBreakdown.map((g) => `${g.count} x ${(g.lengthMm / 1000).toFixed(1)} m`).join(" + ")} ={" "}

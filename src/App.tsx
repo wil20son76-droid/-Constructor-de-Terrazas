@@ -10,7 +10,7 @@ import { useLevelCalculations } from "./hooks/useLevelCalculations";
 import { editEdgeLength, insertPointOnEdge, isAxisAlignedRectangle, makeId, resizeRectangleEdge, splitPolygon, validatePolygon } from "./geometry";
 import { bomToCsv, downloadCsv, downloadJson, printCurrentView, projectToJson } from "./export";
 import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
-import type { DeckSection } from "./types";
+import type { DeckSection, Stair } from "./types";
 
 function App() {
   const store = useProjectStore();
@@ -66,6 +66,22 @@ function App() {
 
     store.updateActiveLevel((l) => ({ ...l, sections: nextSections }));
     setSplitTargetSectionId(nextSections[0].id);
+  };
+
+  const handleAddStair = (edgeIndex: number) => {
+    const totalHeightMm = Math.max(level.heightAboveGround, 200);
+    const stepCount = Math.max(1, Math.round(totalHeightMm / 180));
+    const stair: Stair = {
+      id: makeId("stair"),
+      edgeIndex,
+      widthMm: 900,
+      totalHeightMm,
+      stepCount,
+      stepDepthMm: 280,
+      trallMaterialId: level.trallMaterialId,
+      regelMaterialId: level.regelMaterialId,
+    };
+    store.updateActiveLevel((l) => ({ ...l, stairs: [...l.stairs, stair] }));
   };
 
   const calc = useLevelCalculations({
@@ -226,6 +242,7 @@ function App() {
             splitTargetSectionId={splitTargetSectionId}
             onSetSplitTargetSectionId={setSplitTargetSectionId}
             onConfirmSplit={handleConfirmSplit}
+            onAddStair={handleAddStair}
           />
           {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
         </main>

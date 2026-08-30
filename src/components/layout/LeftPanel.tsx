@@ -143,6 +143,23 @@ export function LeftPanel(props: LeftPanelProps) {
         </p>
       </Section>
 
+      <Section title="Trappa">
+        <button
+          type="button"
+          className={`w-full rounded border px-2 py-1.5 text-left text-sm ${
+            props.editTool === "add-stair" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 hover:bg-slate-50"
+          }`}
+          onClick={() => props.onSetEditTool?.(props.editTool === "add-stair" ? "none" : "add-stair")}
+        >
+          🪜 Lägg till trappa
+        </button>
+        <p className="mt-2 text-xs text-slate-400">
+          {props.editTool === "add-stair"
+            ? "Klicka på valfri kant i planen för att fästa en trappa där."
+            : "Fäst en trappa på valfri kant. Redigera bredd/höjd/steg under fliken Vista struktur."}
+        </p>
+      </Section>
+
       <Section title="Rutnät">
         <div className="flex gap-1">
           {gridOptions.map((mm) => (

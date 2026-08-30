@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { DeckLevel, DeckSection } from "../../types";
 import type { LevelGeometryResult } from "../../materials";
-import { boundingBox, snapToGrid } from "../../geometry";
+import { boundingBox, computeStairPlacementRect, snapToGrid } from "../../geometry";
 import type { ViewMode } from "../../store/projectStore";
 import type { SelectedElement } from "../../deck/inspector";
 import { formatM2, formatMm } from "../../utils/format";
@@ -18,7 +18,7 @@ interface ViewBox {
  * plain pan/zoom + click-a-dimension-to-edit-length, unchanged from before
  * this feature existed. Picking any other tool is an explicit opt-in.
  */
-export type VertexEditTool = "none" | "select" | "add-point" | "add-point-on-edge" | "delete-point" | "measure" | "dela-sektion";
+export type VertexEditTool = "none" | "select" | "add-point" | "add-point-on-edge" | "delete-point" | "measure" | "dela-sektion" | "add-stair";
 
 interface PlanViewProps {
   level: DeckLevel;
@@ -45,6 +45,8 @@ interface PlanViewProps {
   splitTargetSectionId?: string | null;
   onSetSplitTargetSectionId?: (id: string) => void;
   onConfirmSplit?: (indexA: number, indexB: number) => void;
+  /** "Lägg till trappa": click any edge to attach a stair there. */
+  onAddStair?: (edgeIndex: number) => void;
 }
 
 /** Parametric position (clamped 0..1) of the closest point on segment a->b to p. */
@@ -91,6 +93,7 @@ export function PlanView({
   splitTargetSectionId = null,
   onSetSplitTargetSectionId,
   onConfirmSplit,
+  onAddStair,
 }: PlanViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [viewBox, setViewBox] = useState<ViewBox>(() => bboxWithPadding(level.polygon.points));
@@ -505,6 +508,55 @@ export function PlanView({
             ))}
           </g>
         )}
+
+        {/* "Lägg till trappa": click any edge to attach a stair there. */}
+        {editTool === "add-stair" && (
+          <g>
+            {edges.map((edge) => (
+              <line
+                key={`stair-edge-hit-${edge.index}`}
+                data-role="stair-edge-hit"
+                data-index={edge.index}
+                x1={edge.a.x}
+                y1={edge.a.y}
+                x2={edge.b.x}
+                y2={edge.b.y}
+                stroke="#f59e0b"
+                strokeWidth={strokePx * 3}
+                strokeOpacity={0.5}
+                pointerEvents="stroke"
+                style={{ cursor: "pointer" }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAddStair?.(edge.index);
+                }}
+              />
+            ))}
+          </g>
+        )}
+
+        {/* Existing stairs, always shown as a real outward-facing footprint with tread lines. */}
+        {level.stairs.map((stair) => {
+          const runMm = stair.stepCount * stair.stepDepthMm;
+          const rect = computeStairPlacementRect(displayPoints, stair.edgeIndex, stair.widthMm, runMm);
+          const treadLines = Array.from({ length: Math.max(0, stair.stepCount - 1) }, (_, i) => {
+            const t = (i + 1) / stair.stepCount;
+            return {
+              x1: rect[0].x + (rect[3].x - rect[0].x) * t,
+              y1: rect[0].y + (rect[3].y - rect[0].y) * t,
+              x2: rect[1].x + (rect[2].x - rect[1].x) * t,
+              y2: rect[1].y + (rect[2].y - rect[1].y) * t,
+            };
+          });
+          return (
+            <g key={stair.id} pointerEvents="none">
+              <polygon points={polygonPointsAttr(rect)} fill="#fde68a" stroke="#b45309" strokeWidth={strokePx} />
+              {treadLines.map((t, i) => (
+                <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2} stroke="#b45309" strokeWidth={strokePx * 0.5} />
+              ))}
+            </g>
+          );
+        })}
 
         {/* "Välj/Flytta" / "Ta bort punkt": vertex handles. */}
         {(editTool === "select" || editTool === "delete-point") && (

@@ -401,3 +401,55 @@ export function validatePolygon(points: Point[]): ValidationIssue[] {
 
   return issues;
 }
+
+// ---------------------------------------------------------------------------
+// Stair placement: a simple outward-facing rectangle attached to one edge,
+// used only for drawing a stair in the plan (never for material take-off,
+// which lives in structural/stairs.ts).
+// ---------------------------------------------------------------------------
+
+/**
+ * Signed polygon area via the shoelace formula (unlike `polygonArea`, the
+ * sign is kept): positive for one winding direction, negative for the
+ * other. Used to work out which side of an edge is "outward" regardless of
+ * how the polygon happened to be wound (rectangle preset, free-form
+ * drawing, or after edits).
+ */
+export function signedArea(points: Point[]): number {
+  let sum = 0;
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % n];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return sum;
+}
+
+/**
+ * A rectangle attached to edge `edgeIndex`, centred on that edge, `widthMm`
+ * along it and extending `runMm` outward (away from the polygon's
+ * interior) — the visual footprint of a stair in the plan. The outward
+ * direction is derived from the polygon's actual winding (via
+ * `signedArea`), so this works for any polygon, not just axis-aligned
+ * rectangles.
+ */
+export function computeStairPlacementRect(points: Point[], edgeIndex: number, widthMm: number, runMm: number): Point[] {
+  const n = points.length;
+  const a = points[((edgeIndex % n) + n) % n];
+  const b = points[(((edgeIndex + 1) % n) + n) % n];
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return [a, a, a, a];
+  const ux = dx / len;
+  const uy = dy / len;
+  const outward = signedArea(points) >= 0 ? { x: uy, y: -ux } : { x: -uy, y: ux };
+  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const halfW = widthMm / 2;
+  const innerA = { x: mid.x - ux * halfW, y: mid.y - uy * halfW };
+  const innerB = { x: mid.x + ux * halfW, y: mid.y + uy * halfW };
+  const outerA = { x: innerA.x + outward.x * runMm, y: innerA.y + outward.y * runMm };
+  const outerB = { x: innerB.x + outward.x * runMm, y: innerB.y + outward.y * runMm };
+  return [innerA, innerB, outerB, outerA];
+}

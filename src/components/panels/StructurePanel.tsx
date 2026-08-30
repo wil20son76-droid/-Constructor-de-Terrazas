@@ -131,6 +131,86 @@ export function StructurePanel({ level, library, validation, jointCount, regelCc
         </Field>
       </Section>
 
+      <Section title="Trappor">
+        {level.stairs.length === 0 ? (
+          <p className="text-xs text-slate-400">Ingen trappa tillagd. Använd "Lägg till trappa" i vänsterpanelen och klicka på en kant.</p>
+        ) : (
+          <div className="space-y-3">
+            {level.stairs.map((stair) => {
+              const edgeCount = level.polygon.points.length;
+              const fromLabel = ((stair.edgeIndex % edgeCount) + edgeCount) % edgeCount;
+              const toLabel = (fromLabel + 1) % edgeCount;
+              const updateStair = (patch: Partial<typeof stair>) =>
+                onUpdate((l) => ({ ...l, stairs: l.stairs.map((s) => (s.id === stair.id ? { ...s, ...patch } : s)) }));
+              return (
+                <div key={stair.id} className="rounded border border-slate-200 p-2">
+                  <div className="mb-1.5 flex items-center justify-between">
+                    <span className="text-xs font-semibold text-slate-700">
+                      Trappa vid kant {fromLabel + 1}-{toLabel + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onUpdate((l) => ({ ...l, stairs: l.stairs.filter((s) => s.id !== stair.id) }))}
+                      className="rounded border border-red-200 px-1.5 py-0.5 text-[10px] text-red-600 hover:bg-red-50"
+                    >
+                      Ta bort
+                    </button>
+                  </div>
+                  <Field label="Bredd (mm)">
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={stair.widthMm}
+                      onChange={(e) => updateStair({ widthMm: Number(e.target.value) || 1 })}
+                    />
+                  </Field>
+                  <Field label="Total höjd (mm)">
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={stair.totalHeightMm}
+                      onChange={(e) => updateStair({ totalHeightMm: Number(e.target.value) || 1 })}
+                    />
+                  </Field>
+                  <Field label="Antal steg">
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={stair.stepCount}
+                      onChange={(e) => updateStair({ stepCount: Math.max(1, Number(e.target.value) || 1) })}
+                    />
+                  </Field>
+                  <Field label="Stegdjup (mm)">
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={stair.stepDepthMm}
+                      onChange={(e) => updateStair({ stepDepthMm: Number(e.target.value) || 1 })}
+                    />
+                  </Field>
+                  <Field label="Trallmaterial">
+                    <MaterialSelect
+                      materials={library.materials}
+                      category="trall"
+                      value={stair.trallMaterialId}
+                      onChange={(id) => updateStair({ trallMaterialId: id })}
+                    />
+                  </Field>
+                  <Field label="Regelmaterial">
+                    <MaterialSelect
+                      materials={library.materials}
+                      category="regel"
+                      value={stair.regelMaterialId}
+                      onChange={(id) => updateStair({ regelMaterialId: id })}
+                    />
+                  </Field>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Section>
+
       <Section title="Infästningssystem">
         <select
           className={inputClass}
