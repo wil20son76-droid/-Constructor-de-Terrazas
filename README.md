@@ -150,6 +150,31 @@ src/
   dimension labels directly on the plan (typing a new length resizes the
   shape; rectangles stay clean rectangles, general polygons use a
   documented edge-length-edit rule).
+- **Fri form ("Rita själv")**: click-to-add-vertex free-form polygon
+  drawing, closed via double-click or a "Slutför form" button, gated by
+  the polygon validator below before it's accepted.
+- **Redigera form**: five vertex/edge tools — Välj/Flytta (drag a vertex,
+  respects snap), Lägg till punkt (click an edge to insert a point there),
+  Lägg till punkt på kant (select an edge, confirm to insert its
+  midpoint), Ta bort punkt, and Mät avstånd — plus a live Punktlista
+  (X/Y, manually editable) and Kantlängder table that always match the
+  current polygon.
+- **Dela sektion**: split the deck (or an already-split section) into
+  independent trall zones along a chosen vertex-to-vertex chord, each
+  with its own board direction (0°/90°/45°/-45°/custom), material and
+  trallspalt. Every section's boards are real geometry clipped to that
+  section's own polygon (not a CSS pattern) — proven against a 0°/45°
+  two-section split meeting cleanly at the shared boundary.
+- **Trappa (stairs) on any edge**: a "Lägg till trappa" tool attaches a
+  stair to any polygon edge by clicking it; its footprint is drawn as a
+  real outward-facing rectangle with tread lines (the outward direction
+  is derived from the polygon's actual winding, so it works on any edge
+  of any shape), and width/height/step count/step depth/materials are
+  editable per-stair from the Struktur tab.
+- Polygon validation (self-intersection, zero/near-zero area, duplicate
+  points, edges under 50 mm) runs on the level's polygon and every
+  section; an error blocks the BOM (with a clear banner on the plan and
+  in the Material tab) rather than showing numbers from broken geometry.
 - Board orientation (horizontal/vertical/diagonal 45°/custom), trallspalt,
   uniform CC-avstånd for reglar (real CC is mathematically guaranteed to
   never exceed the configured max — see CALCULATION_AUDIT.md), bärlinor
@@ -185,26 +210,28 @@ src/
 - New/Save/Open (LocalStorage) project, Undo/Redo, four view modes
   (terrass/struktur/material/kostnad), an INSPECT/DEBUG element inspector,
   CSV/JSON export, browser print.
-- 114 unit + integration tests covering geometry, board/joist/beam layout,
-  footings, cut optimisation, fasteners, BOM, pricing, labour, stairs,
-  quotation, and three full end-to-end worked examples (a 14×7 m
-  rectangle, an L-shape, and a U-shape) with hand-derived expected values.
+- 140 unit + integration tests covering geometry (including polygon
+  validation, edge-point insertion, and polygon splitting), board/joist/beam
+  layout, per-section board layout, footings, cut optimisation, fasteners,
+  BOM (including section-aware material grouping), pricing, labour, stair
+  placement geometry, quotation, and three full end-to-end worked examples
+  (a 14×7 m rectangle, an L-shape, and a U-shape) with hand-derived expected
+  values.
 
 ## Known limitations / next steps
 
-- Free-form polygon drawing (arbitrary vertex add/remove) is implemented in
-  the geometry engine (`insertVertex`/`removeVertex`) but not yet wired to
-  a plan-view drawing tool — today's shape tools are Rectangle/L/U presets
-  plus per-edge length editing.
 - Multiple deck levels and "add a zone around a house" are supported by the
   data model (`Project.levels`) and the store (`addLevel`/`removeLevel`)
   but the UI only exposes a single active level so far.
-- Stair placement is calculated but not yet drawn on the plan or editable
-  from a dedicated "Lägg till trappa" tool. Wall/open edge classification
-  for kantbräda is a data-model field (`DeckLevel.wallEdgeIndices` /
-  `openEdgeIndices`) without a dedicated UI control yet.
+- Wall/open edge classification for kantbräda is a data-model field
+  (`DeckLevel.wallEdgeIndices` / `openEdgeIndices`) without a dedicated UI
+  control yet.
 - Openings (holes) are supported end-to-end in the geometry/board/joist
   engines but have no UI to draw one yet.
+- A DeckSection can currently only be split via a chord between two
+  *existing* vertices — splitting at an arbitrary point on an edge means
+  first inserting a point there with "Lägg till punkt på kant", then
+  splitting at it.
 - PDF export currently uses the browser print dialog (with print-specific
   CSS) rather than a generated PDF file.
 - Persistence is LocalStorage only, by design — `store/projectStore.ts`
