@@ -2,12 +2,12 @@ import { useMemo, useState } from "react";
 import { TopBar } from "./components/layout/TopBar";
 import { LeftPanel } from "./components/layout/LeftPanel";
 import { RightPanel } from "./components/panels/RightPanel";
-import { PlanView } from "./components/plan/PlanView";
+import { PlanView, type VertexEditTool } from "./components/plan/PlanView";
 import { OpenProjectDialog } from "./components/layout/OpenProjectDialog";
 import { InspectorPanel } from "./components/debug/InspectorPanel";
 import { activeLevel, useProjectStore } from "./store/projectStore";
 import { useLevelCalculations } from "./hooks/useLevelCalculations";
-import { editEdgeLength, isAxisAlignedRectangle, makeId, resizeRectangleEdge, validatePolygon } from "./geometry";
+import { editEdgeLength, insertPointOnEdge, isAxisAlignedRectangle, makeId, resizeRectangleEdge, validatePolygon } from "./geometry";
 import { bomToCsv, downloadCsv, downloadJson, printCurrentView, projectToJson } from "./export";
 import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
 
@@ -19,6 +19,7 @@ function App() {
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const [freeFormMode, setFreeFormMode] = useState(false);
+  const [editTool, setEditTool] = useState<VertexEditTool>("none");
 
   const calc = useLevelCalculations({
     level,
@@ -93,7 +94,15 @@ function App() {
           heightAboveGround={level.heightAboveGround}
           onSetHeight={(mm) => store.updateActiveLevel((l) => ({ ...l, heightAboveGround: mm }))}
           freeFormActive={freeFormMode}
-          onStartFreeForm={() => setFreeFormMode(true)}
+          onStartFreeForm={() => {
+            setEditTool("none");
+            setFreeFormMode(true);
+          }}
+          editTool={editTool}
+          onSetEditTool={(tool) => {
+            setFreeFormMode(false);
+            setEditTool(tool);
+          }}
         />
         <main className="relative min-w-0 flex-1">
           <PlanView
@@ -131,6 +140,25 @@ function App() {
               }));
               setFreeFormMode(false);
             }}
+            editTool={editTool}
+            onMoveVertex={(index, point) =>
+              store.updateActiveLevel((l) => {
+                const nextPoints = l.polygon.points.map((p, i) => (i === index ? point : p));
+                return { ...l, polygon: { ...l.polygon, points: nextPoints } };
+              })
+            }
+            onInsertPointOnEdge={(edgeIndex, t) =>
+              store.updateActiveLevel((l) => ({
+                ...l,
+                polygon: { ...l.polygon, points: insertPointOnEdge(l.polygon.points, edgeIndex, t) },
+              }))
+            }
+            onDeleteVertex={(index) =>
+              store.updateActiveLevel((l) => ({
+                ...l,
+                polygon: { ...l.polygon, points: l.polygon.points.filter((_, i) => i !== index) },
+              }))
+            }
           />
           {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
         </main>

@@ -1,5 +1,6 @@
 import { lShapePolygon, rectanglePolygon, uShapePolygon } from "../../geometry";
 import type { DeckPolygon } from "../../types";
+import type { VertexEditTool } from "../plan/PlanView";
 
 interface LeftPanelProps {
   gridSizeMm: number;
@@ -11,10 +12,20 @@ interface LeftPanelProps {
   onSetHeight: (mm: number) => void;
   freeFormActive?: boolean;
   onStartFreeForm?: () => void;
+  editTool?: VertexEditTool;
+  onSetEditTool?: (tool: VertexEditTool) => void;
 }
 
 const gridOptions = [100, 500, 1000];
 const heightPresets = [0, 200, 400, 600, 1000, 1500];
+
+const editToolOptions: { tool: VertexEditTool; label: string; icon: string }[] = [
+  { tool: "select", label: "Välj/Flytta", icon: "✥" },
+  { tool: "add-point", label: "Lägg till punkt", icon: "➕" },
+  { tool: "add-point-on-edge", label: "Lägg till punkt på kant", icon: "⊹" },
+  { tool: "delete-point", label: "Ta bort punkt", icon: "✕" },
+  { tool: "measure", label: "Mät avstånd", icon: "📏" },
+];
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -65,6 +76,34 @@ export function LeftPanel(props: LeftPanelProps) {
           {props.freeFormActive
             ? "Klicka i planen för att lägga till punkter (P1, P2, P3 …). Avsluta med dubbelklick eller knappen \"Slutför form\"."
             : "Klicka på en måttsättning i planen för att ange exakt längd."}
+        </p>
+      </Section>
+
+      <Section title="Redigera form">
+        <div className="grid grid-cols-1 gap-1.5">
+          {editToolOptions.map(({ tool, label, icon }) => {
+            const active = props.editTool === tool;
+            return (
+              <button
+                key={tool}
+                type="button"
+                className={`rounded border px-2 py-1.5 text-left text-sm ${
+                  active ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 hover:bg-slate-50"
+                }`}
+                onClick={() => props.onSetEditTool?.(active ? "none" : tool)}
+              >
+                {icon} {label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-slate-400">
+          {props.editTool === "select" && "Dra en punkt för att flytta den (respekterar snap)."}
+          {props.editTool === "add-point" && "Klicka på en kant för att lägga till en punkt exakt där."}
+          {props.editTool === "add-point-on-edge" && "Klicka en kant, bekräfta sedan med knappen som visas."}
+          {props.editTool === "delete-point" && "Klicka på en punkt för att ta bort den (minst 3 kvar)."}
+          {props.editTool === "measure" && "Klicka två punkter i planen för att mäta avståndet."}
+          {(!props.editTool || props.editTool === "none") && "Välj ett verktyg för att redigera formens punkter."}
         </p>
       </Section>
 
