@@ -38,6 +38,7 @@ export function buildDefaultLevel(): DeckLevel {
     edgeBoards: [],
     wallEdgeIndices: [],
     openEdgeIndices: [],
+    sections: [],
   };
 }
 

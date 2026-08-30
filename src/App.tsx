@@ -7,7 +7,7 @@ import { OpenProjectDialog } from "./components/layout/OpenProjectDialog";
 import { InspectorPanel } from "./components/debug/InspectorPanel";
 import { activeLevel, useProjectStore } from "./store/projectStore";
 import { useLevelCalculations } from "./hooks/useLevelCalculations";
-import { editEdgeLength, isAxisAlignedRectangle, resizeRectangleEdge } from "./geometry";
+import { editEdgeLength, isAxisAlignedRectangle, makeId, resizeRectangleEdge, validatePolygon } from "./geometry";
 import { bomToCsv, downloadCsv, downloadJson, printCurrentView, projectToJson } from "./export";
 import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
 
@@ -18,6 +18,7 @@ function App() {
   const [openDialogVisible, setOpenDialogVisible] = useState(false);
   const [inspectMode, setInspectMode] = useState(false);
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
+  const [freeFormMode, setFreeFormMode] = useState(false);
 
   const calc = useLevelCalculations({
     level,
@@ -91,6 +92,8 @@ function App() {
           onSetPolygon={(polygon) => store.updateActiveLevel((l) => ({ ...l, polygon, openings: [] }))}
           heightAboveGround={level.heightAboveGround}
           onSetHeight={(mm) => store.updateActiveLevel((l) => ({ ...l, heightAboveGround: mm }))}
+          freeFormActive={freeFormMode}
+          onStartFreeForm={() => setFreeFormMode(true)}
         />
         <main className="relative min-w-0 flex-1">
           <PlanView
@@ -111,6 +114,23 @@ function App() {
             inspectMode={inspectMode}
             selected={selectedElement}
             onSelectElement={setSelectedElement}
+            drawingMode={freeFormMode}
+            onCancelDrawing={() => setFreeFormMode(false)}
+            onFinishDrawing={(drawnPoints) => {
+              const issues = validatePolygon(drawnPoints);
+              const errors = issues.filter((i) => i.severity === "error");
+              if (errors.length > 0) {
+                window.alert(`Formen kunde inte skapas:\n${errors.map((e) => `• ${e.message}`).join("\n")}`);
+                setFreeFormMode(false);
+                return;
+              }
+              store.updateActiveLevel((l) => ({
+                ...l,
+                polygon: { id: makeId("poly"), points: drawnPoints },
+                openings: [],
+              }));
+              setFreeFormMode(false);
+            }}
           />
           {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
         </main>

@@ -72,9 +72,47 @@ export interface DeckLevel {
   wallEdgeIndices: number[];
   /** Edges deliberately left without any edge board (e.g. butts against another deck/zone). */
   openEdgeIndices: number[];
+  /**
+   * Independent trall (deck board) sections within this level, each with
+   * its own polygon, board direction and material — e.g. one section at
+   * 45° meeting another at 0° around a corner. Sections must partition
+   * the level's polygon into non-overlapping, boundary-sharing
+   * subpolygons (built via `DELA SEKTION` / `splitPolygon`).
+   *
+   * Backward compatibility: an EMPTY array (the default) means the level
+   * behaves exactly as before this feature existed — trall is computed
+   * once from `polygon` / `boardDirection` / `boardGap` / `trallMaterialId`
+   * / `fastenerSystemId` directly. As soon as at least one section is
+   * present, those level-level trall fields are ignored in favour of the
+   * sections (see `materials/index.ts`). Optional (rather than a
+   * required empty array) so every existing DeckLevel literal — in tests
+   * and elsewhere — keeps compiling unchanged.
+   */
+  sections?: DeckSection[];
 }
 
 export type EdgeType = "external" | "wall" | "stair" | "open";
+
+/**
+ * An independent trall (deck board) zone within a DeckLevel's overall
+ * polygon — lets each section of a real, irregular deck (around a house
+ * corner, a bay window, a pool edge, ...) run its boards in its own
+ * direction and even use a different board material.
+ */
+export interface DeckSection {
+  id: string;
+  name: string;
+  polygon: DeckPolygon;
+  boardDirection: BoardDirection;
+  /** Board face width, mm — normally the material's own width, but overridable for a custom board. */
+  boardWidthMm: number;
+  /** Board thickness, mm — normally the material's own thickness. */
+  boardThicknessMm: number;
+  /** Gap between boards (trallspalt), mm. */
+  boardGap: number;
+  materialId: string;
+  fastenerSystemId: string;
+}
 
 /** A single computed/placed deck board (result of the layout engine). */
 export interface DeckBoard {
@@ -84,6 +122,10 @@ export interface DeckBoard {
   end: Point;
   lengthMm: number;
   widthMm: number;
+  /** Which DeckSection this board belongs to, when the level uses sections. */
+  sectionId?: string;
+  /** Which trall material this board is made of — needed to group the BOM correctly across sections that use different materials. */
+  materialId?: string;
 }
 
 // ---------------------------------------------------------------------------

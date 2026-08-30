@@ -9,6 +9,8 @@ interface LeftPanelProps {
   onSetPolygon: (polygon: DeckPolygon) => void;
   heightAboveGround: number;
   onSetHeight: (mm: number) => void;
+  freeFormActive?: boolean;
+  onStartFreeForm?: () => void;
 }
 
 const gridOptions = [100, 500, 1000];
@@ -49,9 +51,20 @@ export function LeftPanel(props: LeftPanelProps) {
           >
             ⊔ U-form
           </button>
+          <button
+            type="button"
+            className={`rounded border px-2 py-1.5 text-left text-sm ${
+              props.freeFormActive ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 hover:bg-slate-50"
+            }`}
+            onClick={() => props.onStartFreeForm?.()}
+          >
+            ✏️ Fri form — Rita själv
+          </button>
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          Klicka på en måttsättning i planen för att ange exakt längd. Fler polygonverktyg (fri form, hörn) tillkommer.
+          {props.freeFormActive
+            ? "Klicka i planen för att lägga till punkter (P1, P2, P3 …). Avsluta med dubbelklick eller knappen \"Slutför form\"."
+            : "Klicka på en måttsättning i planen för att ange exakt längd."}
         </p>
       </Section>
 

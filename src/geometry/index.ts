@@ -2,7 +2,7 @@
  * Geometry engine. All inputs/outputs are in millimetres.
  * Pure functions only — no React, no DOM, no pixels.
  */
-import type { DeckOpening, DeckPolygon, Point } from "../types";
+import type { DeckOpening, DeckPolygon, Point, ValidationIssue } from "../types";
 
 export function makeId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
@@ -241,4 +241,163 @@ export function resizeRectangleEdge(points: Point[], edgeIndex: number, newLengt
   const newWidth = editsWidth ? newLengthMm : width;
   const newHeight = editsWidth ? height : newLengthMm;
   return rectanglePolygon(newWidth, newHeight).points.map((p) => ({ x: p.x + origin.x, y: p.y + origin.y }));
+}
+
+// ---------------------------------------------------------------------------
+// Free-form polygon editing: insert a point on an edge, split into
+// subpolygons, and validate the result.
+// ---------------------------------------------------------------------------
+
+/**
+ * Insert a new point on edge (points[edgeIndex] -> points[edgeIndex+1]) at
+ * parametric position `t` (0 = start, 1 = end, 0.5 = midpoint, the
+ * default) along that edge — used by "Lägg till punkt på kant". The
+ * polygon's shape is unchanged immediately after (the new point sits
+ * exactly on the existing edge); the caller typically drags it afterward
+ * to create an inset/outset.
+ */
+export function insertPointOnEdge(points: Point[], edgeIndex: number, t = 0.5): Point[] {
+  const n = points.length;
+  if (n < 2) return points;
+  const startIdx = ((edgeIndex % n) + n) % n;
+  const endIdx = (startIdx + 1) % n;
+  const a = points[startIdx];
+  const b = points[endIdx];
+  const clampedT = Math.min(1, Math.max(0, t));
+  const newPoint: Point = { x: a.x + (b.x - a.x) * clampedT, y: a.y + (b.y - a.y) * clampedT };
+  return insertVertex(points, startIdx, newPoint);
+}
+
+/**
+ * Split a closed polygon into two closed subpolygons along the chord
+ * connecting the vertices at `indexA` and `indexB` — the geometric engine
+ * behind "DELA SEKTION". Both indices must refer to EXISTING vertices; to
+ * split at a point that currently sits mid-edge, call `insertPointOnEdge`
+ * first (this is exactly how the UI's "split along an edge" flow works).
+ *
+ * Walking the original vertex order from A to B (inclusive) gives one
+ * subpolygon; the complementary walk from B back around to A gives the
+ * other. Both subpolygons share the new A-B edge, so sections built this
+ * way always partition the source polygon exactly — no gaps, no overlap.
+ */
+export function splitPolygon(points: Point[], indexA: number, indexB: number): [Point[], Point[]] {
+  const n = points.length;
+  if (n < 4 || indexA === indexB) {
+    throw new Error("splitPolygon requires >=4 points and two distinct vertex indices");
+  }
+  const a = ((indexA % n) + n) % n;
+  const b = ((indexB % n) + n) % n;
+
+  const walk = (from: number, to: number): Point[] => {
+    const result: Point[] = [];
+    let i = from;
+    while (true) {
+      result.push(points[i]);
+      if (i === to) break;
+      i = (i + 1) % n;
+    }
+    return result;
+  };
+
+  const partA = walk(a, b);
+  const partB = walk(b, a);
+  return [partA, partB];
+}
+
+const MIN_EDGE_LENGTH_MM = 50;
+const MIN_DUPLICATE_DISTANCE_MM = 1;
+
+/** Proper (strict interior) segment crossing test — shared endpoints don't count. */
+function segmentsCrossStrictly(a1: Point, a2: Point, b1: Point, b2: Point): boolean {
+  const d1x = a2.x - a1.x;
+  const d1y = a2.y - a1.y;
+  const d2x = b2.x - b1.x;
+  const d2y = b2.y - b1.y;
+  const denom = d1x * d2y - d1y * d2x;
+  if (Math.abs(denom) < 1e-9) return false; // parallel/collinear — not treated as a crossing here
+  const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom;
+  const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / denom;
+  const eps = 1e-9;
+  return t > eps && t < 1 - eps && u > eps && u < 1 - eps;
+}
+
+/** True if any two non-adjacent edges of the polygon cross each other. */
+export function polygonSelfIntersects(points: Point[]): boolean {
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const a1 = points[i];
+    const a2 = points[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      const areAdjacent = j === i || j === (i + 1) % n || (j + 1) % n === i;
+      if (areAdjacent) continue;
+      const b1 = points[j];
+      const b2 = points[(j + 1) % n];
+      if (segmentsCrossStrictly(a1, a2, b1, b2)) return true;
+    }
+  }
+  return false;
+}
+
+/** Indices of points that coincide (within `minDistMm`) with an earlier point. */
+export function findDuplicatePointIndices(points: Point[], minDistMm = MIN_DUPLICATE_DISTANCE_MM): number[] {
+  const duplicates: number[] = [];
+  for (let i = 1; i < points.length; i++) {
+    for (let j = 0; j < i; j++) {
+      if (distance(points[i], points[j]) < minDistMm) {
+        duplicates.push(i);
+        break;
+      }
+    }
+  }
+  return duplicates;
+}
+
+/** Indices of edges (points[i] -> points[i+1]) shorter than `minLengthMm`. */
+export function findTinyEdgeIndices(points: Point[], minLengthMm = MIN_EDGE_LENGTH_MM): number[] {
+  const n = points.length;
+  const tiny: number[] = [];
+  for (let i = 0; i < n; i++) {
+    if (distance(points[i], points[(i + 1) % n]) < minLengthMm) tiny.push(i);
+  }
+  return tiny;
+}
+
+/**
+ * Validate a polygon before it is used for any material calculation.
+ * Returns `error`-severity issues for anything that makes the geometry
+ * unusable (self-intersection, zero/near-zero area, too few points) and
+ * `warning`-severity issues for things that are legal but suspicious
+ * (duplicate points, extremely short edges). Callers must block material
+ * calculations when any `error` issue is present.
+ */
+export function validatePolygon(points: Point[]): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const error = (message: string) => issues.push({ id: makeId("geom_issue"), severity: "error", message });
+  const warn = (message: string) => issues.push({ id: makeId("geom_issue"), severity: "warning", message });
+
+  if (points.length < 3) {
+    error("Formen har färre än 3 punkter — en yta kräver minst en triangel.");
+    return issues; // nothing else can be meaningfully checked
+  }
+
+  const area = polygonArea(points);
+  if (area < 1) {
+    error("Formens area är noll (eller extremt liten) — kontrollera punkterna.");
+  }
+
+  if (polygonSelfIntersects(points)) {
+    error("Formens kanter korsar varandra (self-intersection) — kontrollera punktordningen.");
+  }
+
+  const duplicates = findDuplicatePointIndices(points);
+  if (duplicates.length > 0) {
+    warn(`${duplicates.length} punkt(er) ligger nästan exakt på en annan punkt — kan orsaka felaktiga kanter.`);
+  }
+
+  const tinyEdges = findTinyEdgeIndices(points);
+  if (tinyEdges.length > 0) {
+    warn(`${tinyEdges.length} kant(er) är kortare än ${MIN_EDGE_LENGTH_MM} mm — kontrollera om det är avsiktligt.`);
+  }
+
+  return issues;
 }
