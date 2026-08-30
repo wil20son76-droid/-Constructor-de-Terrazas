@@ -4,7 +4,8 @@
  * spec requests (TRALL / STOMME / PLINTAR / INFÄSTNING / TRAPPA / ÖVRIGT).
  *
  * This module only orchestrates the geometry/structural/cut-optimisation
- * primitives defined elsewhere; it does not contain UI or React code.
+ * primitives defined elsewhere; it does not contain UI or React code. See
+ * CALCULATION_AUDIT.md for the manual derivations behind these formulas.
  */
 import type {
   Beam,
@@ -19,24 +20,31 @@ import type {
   Post,
 } from "../types";
 import { computeAreaSummary } from "../geometry";
-import { computeBoardLayout } from "../deck/boardLayout";
+import { computeBoardLayout, type BoardLayoutResult } from "../deck/boardLayout";
+import { classifyEdges, filterEdgeBoardEligible } from "../deck/edgeClassification";
 import {
   computeBarlinor,
   computeFootings,
   computePostHeight,
   computePosts,
   computeReglar,
+  computeUniformSpacing,
   estimateKortlingCount,
+  type UniformSpacingResult,
 } from "../structural";
 import { computeStair, type StairCalculationResult } from "../structural/stairs";
 import { computeFastenerCounts } from "./fasteners";
-import { computeCutPlan, splitRunsToMaxLength } from "./cutOptimization";
+import { computeCutPlan } from "./cutOptimization";
 
 export interface LevelGeometryResult {
   boards: DeckBoard[];
+  boardLayout: BoardLayoutResult;
   joists: Joist[];
+  regelCcInfo: UniformSpacingResult;
   beams: Beam[];
+  barlinaSpacingInfo: UniformSpacingResult;
   footings: Footing[];
+  plintSpacingInfoByBeam: UniformSpacingResult[];
   posts: Post[];
   kortlingCount: number;
   postHeightMm: number;
@@ -50,11 +58,11 @@ function findMaterial(library: MaterialLibrary, id: string) {
 export function computeLevelGeometry(level: DeckLevel, library: MaterialLibrary): LevelGeometryResult {
   const trallMaterial = findMaterial(library, level.trallMaterialId);
   const boardWidthMm = trallMaterial?.widthMm ?? 120;
-  const layout = computeBoardLayout(level.polygon, level.openings, level.boardDirection, boardWidthMm, level.boardGap);
+  const boardLayout = computeBoardLayout(level.polygon, level.openings, level.boardDirection, boardWidthMm, level.boardGap);
 
-  const joists = computeReglar(level);
-  const beams = computeBarlinor(level);
-  const footings = computeFootings(beams, level.plintTypeId, level.plintMaxSpacing);
+  const { joists, ccInfo: regelCcInfo } = computeReglar(level, library);
+  const { beams, spacingInfo: barlinaSpacingInfo } = computeBarlinor(level, library);
+  const { footings, spacingInfoByBeam: plintSpacingInfoByBeam } = computeFootings(beams, level.plintTypeId, level.plintMaxSpacing);
 
   const trallThicknessMm = trallMaterial?.thicknessMm ?? 28;
   const regelMaterial = findMaterial(library, level.regelMaterialId);
@@ -74,7 +82,20 @@ export function computeLevelGeometry(level: DeckLevel, library: MaterialLibrary)
     result: computeStair(stair, boardWidthMm, level.boardGap),
   }));
 
-  return { boards: layout.boards, joists, beams, footings, posts, kortlingCount, postHeightMm, stairs };
+  return {
+    boards: boardLayout.boards,
+    boardLayout,
+    joists,
+    regelCcInfo,
+    beams,
+    barlinaSpacingInfo,
+    footings,
+    plintSpacingInfoByBeam,
+    posts,
+    kortlingCount,
+    postHeightMm,
+    stairs,
+  };
 }
 
 function purchaseUnitCount(quantity: number, unitsPerPackage?: number): number {
@@ -92,31 +113,28 @@ function makeLumberBomLine(
   const material = findMaterial(library, materialId);
   if (!material || pieces.length === 0) return null;
   const availableLengths = material.availableLengthsMm ?? [Math.max(...pieces)];
-  // A run longer than the longest available stock length has to be built
-  // from multiple spliced boards (e.g. a 14 m board row with 5.4 m stock);
-  // split it into physical segments before cutting, otherwise it would be
-  // priced as one impossibly long, unbuyable "board".
-  const buildablePieces = splitRunsToMaxLength(pieces, Math.max(...availableLengths));
-  const cutPlan = computeCutPlan(materialId, buildablePieces, availableLengths);
+  const cutPlan = computeCutPlan(materialId, pieces, availableLengths);
   const pricePerMeter = material.pricePerMeter ?? 0;
-  const requiredMeters = cutPlan.requiredLengthMm / 1000;
-  const purchaseMeters = (cutPlan.fullBoardsNeeded * cutPlan.chosenLengthMm) / 1000;
-  const subtotal = requiredMeters * pricePerMeter;
-  const purchaseTotal = purchaseMeters * pricePerMeter;
+
+  const technicalLinearMeters = cutPlan.requiredLengthMm / 1000;
+  const purchaseLinearMeters = cutPlan.totalPurchasedLengthMm / 1000;
+  const technicalCost = technicalLinearMeters * pricePerMeter;
+  const purchaseTotal = purchaseLinearMeters * pricePerMeter;
 
   const line: BomLine = {
     materialId,
     group,
     materialName: material.nameSv,
     dimension: material.widthMm && material.thicknessMm ? `${material.widthMm}x${material.thicknessMm}` : "",
-    lengthMm: cutPlan.chosenLengthMm,
-    quantity: pieces.length,
+    technicalQuantity: cutPlan.piecesCount,
+    technicalLinearMeters,
     unit: "st",
-    linearMeters: requiredMeters,
     pricePerUnit: pricePerMeter,
-    subtotal,
+    technicalCost,
     wastePercent: cutPlan.wastePercent,
-    purchaseQuantity: cutPlan.fullBoardsNeeded,
+    purchaseQuantity: cutPlan.totalPurchasedCount,
+    purchaseLinearMeters,
+    purchaseBreakdown: cutPlan.purchasedBreakdown,
     purchaseTotal,
     suppliedByClient,
   };
@@ -141,10 +159,10 @@ function makeUnitBomLine(
     group,
     materialName: reason ? `${material.nameSv} (${reason})` : material.nameSv,
     dimension: material.widthMm && material.thicknessMm ? `${material.widthMm}x${material.thicknessMm}` : "",
-    quantity,
+    technicalQuantity: quantity,
     unit: material.unit ?? "st",
     pricePerUnit,
-    subtotal: quantity * pricePerUnit,
+    technicalCost: quantity * pricePerUnit,
     wastePercent: material.wastePercent,
     purchaseQuantity,
     purchaseTotal: purchaseQuantity * pricePerUnit,
@@ -231,7 +249,10 @@ export function computeLevelBom(
     if (plintLine) bomLines.push(plintLine);
   }
 
-  // Fasteners
+  // Fasteners — screw/clip count comes from REAL board/joist segment
+  // intersections (see materials/fasteners.ts), which is also correct for
+  // L/U-shaped decks where a row is split into multiple segments; it is
+  // never a naive boards.length * joists.length * 2.
   const fastenerSystem = library.fastenerSystems.find((f) => f.id === level.fastenerSystemId);
   if (fastenerSystem) {
     const counts = computeFastenerCounts(
@@ -297,14 +318,19 @@ export function computeLevelBom(
     if (plintSkruvLine) bomLines.push(plintSkruvLine);
   }
 
-  // Edge boards (kantbräda / sargbräda / ventilationsprofil)
+  // Edge boards (kantbräda / sargbräda / ventilationsprofil) — only on
+  // edges classified "external" (never a wall edge, a stair edge, or an
+  // edge the user explicitly marked "open"/untrimmed).
+  const edgeClassification = classifyEdges(level);
   for (const run of level.edgeBoards) {
-    const lengthMm = run.edgeIndices.reduce((sum, idx) => {
+    const eligibleEdges = filterEdgeBoardEligible(run.edgeIndices, edgeClassification);
+    const lengthMm = eligibleEdges.reduce((sum, idx) => {
       const a = level.polygon.points[idx];
       const b = level.polygon.points[(idx + 1) % level.polygon.points.length];
       if (!a || !b) return sum;
       return sum + Math.hypot(b.x - a.x, b.y - a.y);
     }, 0);
+    if (lengthMm <= 0) continue;
     const edgeLine = makeLumberBomLine(library, run.materialId, "OVRIGT", [lengthMm], suppliedBy(run.materialId));
     if (edgeLine) {
       bomLines.push(edgeLine.line);
@@ -353,3 +379,5 @@ export function computeLevelBom(
 export function summarizeLevel(level: DeckLevel) {
   return computeAreaSummary(level.polygon, level.openings);
 }
+
+export { computeUniformSpacing };

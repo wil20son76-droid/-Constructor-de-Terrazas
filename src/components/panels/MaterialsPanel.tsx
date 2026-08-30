@@ -49,13 +49,20 @@ export function MaterialsPanel({ bomLines, cutPlans, clientSuppliedMaterialIds, 
                   </div>
                   <div className="mt-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 text-slate-500">
                     <span>
-                      Behov: {line.quantity} {line.unit}
+                      Behov (teknisk): {line.technicalQuantity} {line.unit}
+                      {line.technicalLinearMeters !== undefined && ` (${formatMeters(line.technicalLinearMeters)})`}
                     </span>
                     <span>
                       Inköp: {line.purchaseQuantity} {line.unit}
+                      {line.purchaseLinearMeters !== undefined && ` (${formatMeters(line.purchaseLinearMeters)})`}
                     </span>
                     <span className="font-semibold text-slate-800">{formatSek(line.purchaseTotal)}</span>
                   </div>
+                  {line.purchaseBreakdown && line.purchaseBreakdown.length > 0 && (
+                    <div className="mt-0.5 text-slate-400">
+                      {line.purchaseBreakdown.map((g) => `${g.count} x ${(g.lengthMm / 1000).toFixed(1)} m`).join(" + ")}
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -67,8 +74,11 @@ export function MaterialsPanel({ bomLines, cutPlans, clientSuppliedMaterialIds, 
         <ul className="space-y-1 text-xs text-slate-600">
           {cutPlans.map((plan) => (
             <li key={plan.materialId}>
-              {plan.materialId}: {formatMeters(plan.requiredLengthMm / 1000)} behövs → {plan.fullBoardsNeeded} st à{" "}
-              {plan.chosenLengthMm} mm, {plan.offcutsReusable} återanvändbara rester, spill {plan.wastePercent.toFixed(1)}%
+              {plan.materialId}: teknisk {formatMeters(plan.requiredLengthMm / 1000)} ({plan.piecesCount} st,{" "}
+              {plan.segmentsCount} segment{plan.spliceCount > 0 ? `, ${plan.spliceCount} skarvade` : ""}) → inköp{" "}
+              {plan.purchasedBreakdown.map((g) => `${g.count} x ${(g.lengthMm / 1000).toFixed(1)} m`).join(" + ")} ={" "}
+              {formatMeters(plan.totalPurchasedLengthMm / 1000)}, {plan.offcutsReusable} återanvändbara rester, spill{" "}
+              {formatMeters(plan.wasteMm / 1000)} ({plan.wastePercent.toFixed(1)}%)
             </li>
           ))}
         </ul>

@@ -1,4 +1,5 @@
 import type { AreaSummary } from "../../geometry";
+import type { UniformSpacingResult } from "../../structural";
 import type { BomLine, CostSummary, CutPlanResult, DeckLevel, LabourItem, MaterialLibrary, Project, ValidationIssue } from "../../types";
 import type { ViewMode } from "../../store/projectStore";
 import { DeckPropertiesPanel } from "./DeckPropertiesPanel";
@@ -14,6 +15,8 @@ interface Props {
   area: AreaSummary;
   validation: ValidationIssue[];
   jointCount: { joists: number; beams: number; footings: number; posts: number };
+  regelCcInfo: UniformSpacingResult;
+  barlinaSpacingInfo: UniformSpacingResult;
   bomLines: BomLine[];
   cutPlans: CutPlanResult[];
   costs: CostSummary;
@@ -35,6 +38,8 @@ export function RightPanel(props: Props) {
           library={props.library}
           validation={props.validation}
           jointCount={props.jointCount}
+          regelCcInfo={props.regelCcInfo}
+          barlinaSpacingInfo={props.barlinaSpacingInfo}
           onUpdate={props.onUpdateLevel}
         />
       )}

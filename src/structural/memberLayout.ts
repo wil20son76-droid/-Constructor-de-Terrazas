@@ -34,6 +34,18 @@ function rotatePointInverse(p: Point, angleDeg: number): Point {
   return { x: roundMm(p.x * cos - p.y * sin), y: roundMm(p.x * sin + p.y * cos) };
 }
 
+/**
+ * Bounding box of `points` after rotating into the local frame where
+ * `angleDeg` becomes the local X axis (same convention as
+ * `computeMemberLines`). Used to measure a polygon's span along a given
+ * direction for CC-spacing calculations, without duplicating the
+ * rotation/rounding logic at each call site.
+ */
+export function rotatedBoundingBox(points: Point[], angleDeg: number) {
+  const local = points.map((p) => rotatePoint(p, angleDeg));
+  return boundingBox(local);
+}
+
 type Interval = [number, number];
 
 function scanlineIntervals(points: Point[], rowY: number): Interval[] {
@@ -80,36 +92,122 @@ export interface MemberLine {
   lengthMm: number;
   /** Position along the perpendicular axis, in the local rotated frame (mm). */
   rowPosition: number;
+  /** Index into the `rows` array passed to `clipRowsToPolygon`. */
+  rowIndex: number;
+}
+
+const BOUNDARY_SAMPLE_EPS = 1e-3;
+
+/**
+ * Clip a family of rows (each a line at a given position along the
+ * perpendicular axis, running along `angleDeg`) against a polygon minus
+ * openings. A row lying exactly on the polygon's bounding-box boundary —
+ * which for an axis-aligned edge means the scanline sits exactly on top
+ * of a horizontal polygon edge — is a degenerate case for the crossing
+ * test above (it produces no crossings at all, not the full-width
+ * interval we actually want there), so such rows are sampled a hair
+ * inside the polygon; the reported line still uses the true, un-nudged
+ * row position.
+ *
+ * A single row can produce zero, one, or several segments (e.g. an
+ * L-shape notch splits one row into two disjoint pieces) — each becomes
+ * its own `MemberLine`, tagged with the originating row's index so
+ * callers can look up per-row metadata (e.g. a deck board's width).
+ */
+export function clipRowsToPolygon(
+  polygon: DeckPolygon,
+  openings: DeckOpening[],
+  angleDeg: number,
+  rows: number[],
+): MemberLine[] {
+  const localPoly = polygon.points.map((p) => rotatePoint(p, angleDeg));
+  const localOpenings = openings.map((o) => o.points.map((p) => rotatePoint(p, angleDeg)));
+  const bbox = boundingBox(localPoly);
+  const lines: MemberLine[] = [];
+
+  rows.forEach((rowY, rowIndex) => {
+    const nearMin = Math.abs(rowY - bbox.minY) < BOUNDARY_SAMPLE_EPS;
+    const nearMax = Math.abs(rowY - bbox.maxY) < BOUNDARY_SAMPLE_EPS;
+    const sampleY = nearMin ? rowY + BOUNDARY_SAMPLE_EPS : nearMax ? rowY - BOUNDARY_SAMPLE_EPS : rowY;
+
+    let intervals = scanlineIntervals(localPoly, sampleY);
+    for (const opening of localOpenings) {
+      intervals = subtractIntervals(intervals, scanlineIntervals(opening, sampleY));
+    }
+    for (const [x1, x2] of intervals) {
+      const start = rotatePointInverse({ x: x1, y: rowY }, angleDeg);
+      const end = rotatePointInverse({ x: x2, y: rowY }, angleDeg);
+      lines.push({ start, end, lengthMm: x2 - x1, rowPosition: rowY, rowIndex });
+    }
+  });
+  return lines;
 }
 
 export type SpacingMode = "centered" | "edge-to-edge";
+
+export interface UniformSpacingResult {
+  /** The user-configured maximum centre-to-centre spacing, mm. */
+  maxSpacingMm: number;
+  /** ceil(span / maxSpacing): the minimum number of bays needed so no bay exceeds maxSpacing. */
+  numberOfSpaces: number;
+  /** span / numberOfSpaces: the actual, uniform centre-to-centre spacing used — always <= maxSpacingMm. */
+  realSpacingMm: number;
+  /** numberOfSpaces + 1: one member at each end plus one per interior bay boundary. */
+  numberOfMembers: number;
+  /** Member positions along the span, from 0 to span, evenly spaced by realSpacingMm. */
+  positions: number[];
+}
+
+/**
+ * Compute a uniform, edge-to-edge centre-to-centre (CC) spacing plan for a
+ * span of structural members (reglar, bärlinor, plintar along a beam).
+ *
+ * This is deliberately NOT `ceil(span / maxSpacing)` boards placed at the
+ * nominal spacing with one short leftover bay at the end — that can leave
+ * a real CC very different from the configured maximum and never
+ * guarantees every bay is <= maxSpacing in a way a carpenter would expect
+ * ("uneven last bay" is not standard practice). Instead every bay gets the
+ * same real spacing, which is mathematically guaranteed to be
+ * <= maxSpacingMm because numberOfSpaces is rounded UP:
+ *
+ *   numberOfSpaces = ceil(span / maxSpacing)
+ *   realSpacing    = span / numberOfSpaces   (<= maxSpacing by construction)
+ *   numberOfMembers = numberOfSpaces + 1
+ */
+export function computeUniformSpacing(span: number, maxSpacingMm: number): UniformSpacingResult {
+  if (span <= 0 || maxSpacingMm <= 0) {
+    return { maxSpacingMm, numberOfSpaces: 0, realSpacingMm: 0, numberOfMembers: span > 0 ? 1 : 0, positions: span > 0 ? [0] : [] };
+  }
+  const numberOfSpaces = Math.max(1, Math.ceil(span / maxSpacingMm));
+  const realSpacingMm = span / numberOfSpaces;
+  const numberOfMembers = numberOfSpaces + 1;
+  const positions = Array.from({ length: numberOfMembers }, (_, i) => i * realSpacingMm);
+  return { maxSpacingMm, numberOfSpaces, realSpacingMm, numberOfMembers, positions };
+}
 
 /**
  * Compute row positions (along the perpendicular axis) for a family of
  * parallel members, given the axis extent [min, max] and nominal spacing.
  *
- * - "edge-to-edge": first row at `min`, then every `spacing`, plus a final
- *   row exactly at `max` (the last bay may be shorter than nominal spacing).
- *   Used for reglar/bärlinor, which must reach both edges of the deck.
+ * - "edge-to-edge": uniform CC spacing via `computeUniformSpacing` (see
+ *   above) — the real spacing is always <= the configured maximum and
+ *   identical between every pair of adjacent members. Used for
+ *   reglar/bärlinor/plintar, which must reach both edges of the deck.
  * - "centered": rows start at `min + spacing/2` and stop before `max`.
- *   Used for deck boards, where `spacing` already includes board width.
+ *   Kept for callers that don't need the deck-board-specific last-row/cut
+ *   handling in `deck/boardLayout.ts`.
  */
 export function computeRowPositions(min: number, max: number, spacing: number, mode: SpacingMode): number[] {
   if (spacing <= 0 || max <= min) return [];
-  const positions: number[] = [];
   if (mode === "edge-to-edge") {
-    let pos = min;
-    while (pos < max - 1e-6) {
-      positions.push(pos);
-      pos += spacing;
-    }
-    positions.push(max);
-  } else {
-    let pos = min + spacing / 2;
-    while (pos <= max - 1e-6) {
-      positions.push(pos);
-      pos += spacing;
-    }
+    const { positions } = computeUniformSpacing(max - min, spacing);
+    return positions.map((p) => p + min);
+  }
+  const positions: number[] = [];
+  let pos = min + spacing / 2;
+  while (pos <= max - 1e-6) {
+    positions.push(pos);
+    pos += spacing;
   }
   return positions;
 }
@@ -126,42 +224,9 @@ export function computeMemberLines(
   spacing: number,
   mode: SpacingMode,
 ): MemberLine[] {
-  const localPoly = polygon.points.map((p) => rotatePoint(p, angleDeg));
-  const localOpenings = openings.map((o) => o.points.map((p) => rotatePoint(p, angleDeg)));
-  const bbox = boundingBox(localPoly);
-
+  const bbox = rotatedBoundingBox(polygon.points, angleDeg);
   const rows = computeRowPositions(bbox.minY, bbox.maxY, spacing, mode);
-  const lines: MemberLine[] = [];
-
-  // In edge-to-edge mode the first/last rows sit exactly on the polygon's
-  // bounding-box boundary, which for an axis-aligned edge means the
-  // scanline lies exactly on top of a horizontal polygon edge — a
-  // degenerate case for the crossing test below (a boundary lying exactly
-  // on the scanline produces no crossings at all, not the full-width
-  // interval we actually want there). Sampling a hair inside the polygon
-  // for those two rows sidesteps the degeneracy while the reported line
-  // still uses the true, un-nudged row position.
-  const BOUNDARY_SAMPLE_EPS = 1e-3;
-  const sampleYFor = (rowY: number, index: number): number => {
-    if (mode !== "edge-to-edge") return rowY;
-    if (index === 0 && rowY === bbox.minY) return rowY + BOUNDARY_SAMPLE_EPS;
-    if (index === rows.length - 1 && rowY === bbox.maxY) return rowY - BOUNDARY_SAMPLE_EPS;
-    return rowY;
-  };
-
-  rows.forEach((rowY, index) => {
-    const sampleY = sampleYFor(rowY, index);
-    let intervals = scanlineIntervals(localPoly, sampleY);
-    for (const opening of localOpenings) {
-      intervals = subtractIntervals(intervals, scanlineIntervals(opening, sampleY));
-    }
-    for (const [x1, x2] of intervals) {
-      const start = rotatePointInverse({ x: x1, y: rowY }, angleDeg);
-      const end = rotatePointInverse({ x: x2, y: rowY }, angleDeg);
-      lines.push({ start, end, lengthMm: x2 - x1, rowPosition: rowY });
-    }
-  });
-  return lines;
+  return clipRowsToPolygon(polygon, openings, angleDeg, rows);
 }
 
 /**

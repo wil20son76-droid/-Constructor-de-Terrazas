@@ -3,6 +3,7 @@ import type { DeckLevel } from "../../types";
 import type { LevelGeometryResult } from "../../materials";
 import { boundingBox, snapToGrid } from "../../geometry";
 import type { ViewMode } from "../../store/projectStore";
+import type { SelectedElement } from "../../deck/inspector";
 import { formatM2, formatMm } from "../../utils/format";
 
 interface ViewBox {
@@ -20,6 +21,9 @@ interface PlanViewProps {
   snapEnabled: boolean;
   netAreaM2: number;
   onEditEdge: (edgeIndex: number, newLengthMm: number) => void;
+  inspectMode?: boolean;
+  selected?: SelectedElement | null;
+  onSelectElement?: (el: SelectedElement) => void;
 }
 
 function polygonPointsAttr(points: { x: number; y: number }[]): string {
@@ -34,7 +38,18 @@ function bboxWithPadding(points: { x: number; y: number }[], paddingRatio = 0.25
   return { x: bbox.minX - pad, y: bbox.minY - pad, w: w + pad * 2, h: h + pad * 2 };
 }
 
-export function PlanView({ level, geometry, viewMode, gridSizeMm, snapEnabled, netAreaM2, onEditEdge }: PlanViewProps) {
+export function PlanView({
+  level,
+  geometry,
+  viewMode,
+  gridSizeMm,
+  snapEnabled,
+  netAreaM2,
+  onEditEdge,
+  inspectMode = false,
+  selected = null,
+  onSelectElement,
+}: PlanViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [viewBox, setViewBox] = useState<ViewBox>(() => bboxWithPadding(level.polygon.points));
   const [dragging, setDragging] = useState<{ startX: number; startY: number; origin: ViewBox } | null>(null);
@@ -151,38 +166,76 @@ export function PlanView({ level, geometry, viewMode, gridSizeMm, snapEnabled, n
         ))}
 
         {showBoards &&
-          geometry.boards.map((b) => (
-            <line
-              key={b.id}
-              x1={b.start.x}
-              y1={b.start.y}
-              x2={b.end.x}
-              y2={b.end.y}
-              stroke={showStructure ? "#fcd34d" : "#92400e"}
-              strokeWidth={Math.max(b.widthMm * 0.8, strokePx)}
-              strokeOpacity={showStructure ? 0.5 : 0.85}
-            />
-          ))}
+          geometry.boards.map((b, i) => {
+            const isSelected = inspectMode && selected?.type === "trall" && selected.index === i;
+            return (
+              <line
+                key={b.id}
+                x1={b.start.x}
+                y1={b.start.y}
+                x2={b.end.x}
+                y2={b.end.y}
+                stroke={isSelected ? "#2563eb" : showStructure ? "#fcd34d" : "#92400e"}
+                strokeWidth={isSelected ? Math.max(b.widthMm, strokePx * 2) : Math.max(b.widthMm * 0.8, strokePx)}
+                strokeOpacity={isSelected ? 1 : showStructure ? 0.5 : 0.85}
+                onClick={inspectMode ? () => onSelectElement?.({ type: "trall", index: i }) : undefined}
+                style={inspectMode ? { cursor: "pointer" } : undefined}
+              />
+            );
+          })}
 
         {showStructure &&
-          geometry.joists.map((j) => (
-            <line key={j.id} x1={j.start.x} y1={j.start.y} x2={j.end.x} y2={j.end.y} stroke="#16a34a" strokeWidth={strokePx * 2} />
-          ))}
+          geometry.joists.map((j, i) => {
+            const isSelected = inspectMode && selected?.type === "regel" && selected.index === i;
+            return (
+              <line
+                key={j.id}
+                x1={j.start.x}
+                y1={j.start.y}
+                x2={j.end.x}
+                y2={j.end.y}
+                stroke={isSelected ? "#2563eb" : "#16a34a"}
+                strokeWidth={isSelected ? strokePx * 4 : strokePx * 2}
+                onClick={inspectMode ? () => onSelectElement?.({ type: "regel", index: i }) : undefined}
+                style={inspectMode ? { cursor: "pointer" } : undefined}
+              />
+            );
+          })}
 
         {showStructure &&
-          geometry.beams.map((b) => (
-            <line key={b.id} x1={b.start.x} y1={b.start.y} x2={b.end.x} y2={b.end.y} stroke="#dc2626" strokeWidth={strokePx * 2.5} />
-          ))}
+          geometry.beams.map((b, i) => {
+            const isSelected = inspectMode && selected?.type === "barlina" && selected.index === i;
+            return (
+              <line
+                key={b.id}
+                x1={b.start.x}
+                y1={b.start.y}
+                x2={b.end.x}
+                y2={b.end.y}
+                stroke={isSelected ? "#2563eb" : "#dc2626"}
+                strokeWidth={isSelected ? strokePx * 4.5 : strokePx * 2.5}
+                onClick={inspectMode ? () => onSelectElement?.({ type: "barlina", index: i }) : undefined}
+                style={inspectMode ? { cursor: "pointer" } : undefined}
+              />
+            );
+          })}
 
         {showStructure &&
-          geometry.footings.map((f) => (
-            <g key={f.id}>
-              <circle cx={f.position.x} cy={f.position.y} r={strokePx * 6} fill="#1e293b" />
-              <text x={f.position.x} y={f.position.y - strokePx * 8} fontSize={fontPx * 0.6} textAnchor="middle" fill="#1e293b">
-                {f.label}
-              </text>
-            </g>
-          ))}
+          geometry.footings.map((f, i) => {
+            const isSelected = inspectMode && selected?.type === "plint" && selected.index === i;
+            return (
+              <g
+                key={f.id}
+                onClick={inspectMode ? () => onSelectElement?.({ type: "plint", index: i }) : undefined}
+                style={inspectMode ? { cursor: "pointer" } : undefined}
+              >
+                <circle cx={f.position.x} cy={f.position.y} r={isSelected ? strokePx * 9 : strokePx * 6} fill={isSelected ? "#2563eb" : "#1e293b"} />
+                <text x={f.position.x} y={f.position.y - strokePx * 8} fontSize={fontPx * 0.6} textAnchor="middle" fill="#1e293b">
+                  {f.label}
+                </text>
+              </g>
+            );
+          })}
 
         {/* Dimension labels per edge */}
         {edges.map((edge) => {

@@ -14,67 +14,118 @@
  *  - For material dimension strings like "45x95", `widthMm` is the
  *    horizontal cross-section and `thicknessMm` is the installed
  *    (vertical) height of the member.
+ *
+ * CC (centre-to-centre) spacing: every family of parallel members
+ * (reglar, bärlinor, and plintar along a bärlina) uses the uniform
+ * edge-to-edge spacing plan from `computeUniformSpacing` — see that
+ * function's doc comment for why a naive `ceil(span / maxCC)` with one
+ * short leftover bay is wrong. The resulting `realSpacingMm` is always
+ * <= the configured maximum, by construction.
  */
-import type { Beam, DeckLevel, Footing, Joist, Point, Post } from "../types";
+import type { Beam, DeckLevel, Footing, Joist, MaterialLibrary, Point, Post } from "../types";
 import { makeId } from "../geometry";
 import { boardAngleFor } from "../deck/boardLayout";
-import { computeMemberLines, computePerpendicularMemberLines, computeRowPositions } from "./memberLayout";
+import {
+  computeMemberLines,
+  computePerpendicularMemberLines,
+  computeUniformSpacing,
+  rotatedBoundingBox,
+  type UniformSpacingResult,
+} from "./memberLayout";
 
-export function computeReglar(level: DeckLevel): Joist[] {
+function findMaterialDimension(library: MaterialLibrary, materialId: string): string | undefined {
+  const m = library.materials.find((mat) => mat.id === materialId);
+  return m?.widthMm && m?.thicknessMm ? `${m.widthMm}x${m.thicknessMm}` : undefined;
+}
+
+export interface ReglarResult {
+  joists: Joist[];
+  /** CC spacing plan computed from the polygon's bounding-box span along the board direction. */
+  ccInfo: UniformSpacingResult;
+}
+
+export function computeReglar(level: DeckLevel, library: MaterialLibrary): ReglarResult {
   const angle = boardAngleFor(level.boardDirection);
-  const lines = computePerpendicularMemberLines(
-    level.polygon,
-    level.openings,
-    angle,
-    level.regelSpacing,
-    "edge-to-edge",
-  );
-  return lines.map((line) => ({
+  const dimension = findMaterialDimension(library, level.regelMaterialId);
+
+  // Reglar run perpendicular to the boards (world direction angle+90); the
+  // row spacing that places them is measured along local-Y of THAT
+  // rotation, which is `computePerpendicularMemberLines`'s internal frame
+  // (angle+90). Using `angle` here instead would measure the wrong axis
+  // (the board-length direction instead of the board-width/CC direction)
+  // — this must match the bbox computeMemberLines(..., angle+90, ...)
+  // actually uses internally, or the reported CC info would silently
+  // disagree with the real joist placement.
+  const bbox = rotatedBoundingBox(level.polygon.points, angle + 90);
+  const ccInfo = computeUniformSpacing(bbox.maxY - bbox.minY, level.regelSpacing);
+
+  const lines = computePerpendicularMemberLines(level.polygon, level.openings, angle, level.regelSpacing, "edge-to-edge");
+  const joists: Joist[] = lines.map((line) => ({
     id: makeId("regel"),
     materialId: level.regelMaterialId,
     start: line.start,
     end: line.end,
     lengthMm: line.lengthMm,
+    dimension,
   }));
+  return { joists, ccInfo };
 }
 
-export function computeBarlinor(level: DeckLevel): Beam[] {
+export interface BarlinorResult {
+  beams: Beam[];
+  spacingInfo: UniformSpacingResult;
+}
+
+export function computeBarlinor(level: DeckLevel, library: MaterialLibrary): BarlinorResult {
   const angle = boardAngleFor(level.boardDirection);
-  const lines = computeMemberLines(
-    level.polygon,
-    level.openings,
-    angle,
-    level.barlinaMaxSpacing,
-    "edge-to-edge",
-  );
-  return lines.map((line) => ({
+  const dimension = findMaterialDimension(library, level.barlinaMaterialId);
+
+  // Bärlinor run parallel to the boards (world direction `angle`), placed
+  // via `computeMemberLines(..., angle, ...)`, whose internal bbox is
+  // exactly `rotatedBoundingBox(points, angle)` — reuse the same rotation
+  // here so this reported spacing always matches the real beam placement.
+  const bbox = rotatedBoundingBox(level.polygon.points, angle);
+  const spacingInfo = computeUniformSpacing(bbox.maxY - bbox.minY, level.barlinaMaxSpacing);
+
+  const lines = computeMemberLines(level.polygon, level.openings, angle, level.barlinaMaxSpacing, "edge-to-edge");
+  const beams: Beam[] = lines.map((line) => ({
     id: makeId("barlina"),
     materialId: level.barlinaMaterialId,
     start: line.start,
     end: line.end,
     lengthMm: line.lengthMm,
+    dimension,
   }));
+  return { beams, spacingInfo };
+}
+
+export interface FootingsResult {
+  footings: Footing[];
+  /** Per-beam spacing plans, in the same order as the `barlinor` argument. */
+  spacingInfoByBeam: UniformSpacingResult[];
 }
 
 /** Distribute footings (plintar) along each bärlina, numbered P1, P2, ... */
-export function computeFootings(barlinor: Beam[], plintTypeId: string, maxSpacingMm: number): Footing[] {
+export function computeFootings(barlinor: Beam[], plintTypeId: string, maxSpacingMm: number): FootingsResult {
   const footings: Footing[] = [];
+  const spacingInfoByBeam: UniformSpacingResult[] = [];
   let counter = 1;
   for (const beam of barlinor) {
-    const positions = computeRowPositions(0, beam.lengthMm, maxSpacingMm, "edge-to-edge");
+    const spacing = computeUniformSpacing(beam.lengthMm, maxSpacingMm);
+    spacingInfoByBeam.push(spacing);
     const dx = beam.end.x - beam.start.x;
     const dy = beam.end.y - beam.start.y;
     const len = beam.lengthMm || 1;
-    for (const t of positions) {
+    for (const t of spacing.positions) {
       const position: Point = {
         x: beam.start.x + (dx * t) / len,
         y: beam.start.y + (dy * t) / len,
       };
-      footings.push({ id: makeId("plint"), typeId: plintTypeId, position, label: `P${counter}` });
+      footings.push({ id: makeId("plint"), typeId: plintTypeId, position, label: `P${counter}`, beamId: beam.id });
       counter++;
     }
   }
-  return footings;
+  return { footings, spacingInfoByBeam };
 }
 
 /**
@@ -119,3 +170,6 @@ export function estimateKortlingCount(reglar: Joist[], spacingMm: number): numbe
   const rowsPerBay = Math.max(0, Math.floor(avgLength / spacingMm));
   return bays * rowsPerBay;
 }
+
+export { computeUniformSpacing } from "./memberLayout";
+export type { UniformSpacingResult } from "./memberLayout";

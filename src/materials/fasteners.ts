@@ -7,6 +7,16 @@
  */
 import type { DeckBoard, FastenerSystem, Joist, Point } from "../types";
 
+// A board's end frequently lands exactly ON a joist — most obviously the
+// two outermost joists, which sit flush with the deck's edge, exactly
+// where every board's endpoint is. That is a real, physical fastening
+// point (the last screw of a board goes into the joist its end rests on,
+// edge joists included), so the crossing test below is INCLUSIVE of
+// t=0/t=1 and u=0/u=1, not just strict interior crossings. This is safe
+// here specifically because boards and joists are always perpendicular
+// (joist run direction is `boardAngle + 90`) and therefore never
+// collinear, so there is no touching-without-crossing ambiguity to guard
+// against.
 function segmentsIntersect(a1: Point, a2: Point, b1: Point, b2: Point): boolean {
   const d1x = a2.x - a1.x;
   const d1y = a2.y - a1.y;
@@ -17,7 +27,7 @@ function segmentsIntersect(a1: Point, a2: Point, b1: Point, b2: Point): boolean 
   const t = ((b1.x - a1.x) * d2y - (b1.y - a1.y) * d2x) / denom;
   const u = ((b1.x - a1.x) * d1y - (b1.y - a1.y) * d1x) / denom;
   const eps = 1e-6;
-  return t > eps && t < 1 - eps && u > eps && u < 1 - eps;
+  return t > -eps && t < 1 + eps && u > -eps && u < 1 + eps;
 }
 
 /** Number of points where deck boards cross joists (trall/regel intersections). */

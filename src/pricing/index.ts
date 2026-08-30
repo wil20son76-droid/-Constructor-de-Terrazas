@@ -1,18 +1,25 @@
 /**
  * Pricing / cost engine. Pure functions producing a deterministic
  * CostSummary from a material cost figure, a labour cost figure, and the
- * project's configurable margin / VAT (moms) / ROT settings.
+ * project's configurable påslag (markup) / VAT (moms) / ROT settings.
+ *
+ * Påslag vs. margin: this engine applies a MARKUP on cost —
+ * sellingPrice = cost * (1 + markupPercent / 100) — never a margin
+ * (sellingPrice such that (sellingPrice - cost) / sellingPrice =
+ * marginPercent). The two are mathematically different for the same
+ * percent input; the UI must always label this "Påslag %".
  *
  * ROT-avdrag rules change over time and depend on the client's personal
- * tax situation — this module never assumes a rate or cap. It only
- * applies whatever percent/limit the user has configured, and only ever
- * to the labour portion of the cost (materials are never ROT-deductible
- * under current Swedish rules), per the spec's explicit requirement.
+ * tax situation — this module never assumes a rate, cap, or which cost
+ * categories are eligible. It only applies whatever percent/limit/
+ * eligibility the user has configured (see RotEligibility), all values
+ * kept at full floating-point precision until the final presentation
+ * layer rounds them for display.
  */
-import type { BomLine, CostSummary } from "../types";
+import type { BomLine, CostSummary, RotEligibility } from "../types";
 
-export interface MarginConfig {
-  marginPercent: number;
+export interface MarkupConfig {
+  markupPercent: number;
   machineCost: number;
   transportCost: number;
   excavationCost: number;
@@ -23,6 +30,7 @@ export interface RotConfig {
   rotEnabled: boolean;
   rotPercent: number;
   rotMaxDeduction: number;
+  eligibility: RotEligibility;
 }
 
 export function computeMaterialCost(bomLines: BomLine[]): number {
@@ -37,25 +45,31 @@ export function computeCostSummary(
   materialCost: number,
   labourCost: number,
   otherCostsTotal: number,
-  margin: MarginConfig,
+  markup: MarkupConfig,
   vatPercent: number,
   rot: RotConfig,
 ): CostSummary {
-  const machineCost = margin.machineCost;
-  const transportCost = margin.transportCost;
-  const excavationCost = margin.excavationCost;
-  const wasteRemovalCost = margin.wasteRemovalCost;
+  const machineCost = markup.machineCost;
+  const transportCost = markup.transportCost;
+  const excavationCost = markup.excavationCost;
+  const wasteRemovalCost = markup.wasteRemovalCost;
   const otherCost = otherCostsTotal;
 
   const subtotal = materialCost + labourCost + machineCost + transportCost + excavationCost + wasteRemovalCost + otherCost;
 
-  const marginAmount = subtotal * (margin.marginPercent / 100);
-  const priceExVat = subtotal + marginAmount;
+  // Påslag (markup on cost) — NOT a margin. cost=100, markup=20% -> 120.
+  const markupAmount = subtotal * (markup.markupPercent / 100);
+  const priceExVat = subtotal + markupAmount;
   const vatAmount = priceExVat * (vatPercent / 100);
   const priceIncVat = priceExVat + vatAmount;
 
-  const rotDeductibleLabourAmount = rot.rotEnabled ? labourCost : 0;
-  const rawRotDeduction = rotDeductibleLabourAmount * (rot.rotPercent / 100);
+  const rotEligibleAmount = rot.rotEnabled
+    ? (rot.eligibility.materialEligible ? materialCost : 0) +
+      (rot.eligibility.labourEligible ? labourCost : 0) +
+      (rot.eligibility.machinesEligible ? machineCost : 0) +
+      (rot.eligibility.transportEligible ? transportCost : 0)
+    : 0;
+  const rawRotDeduction = rotEligibleAmount * (rot.rotPercent / 100);
   const rotDeductionAmount = rot.rotEnabled ? Math.min(rawRotDeduction, rot.rotMaxDeduction) : 0;
   const priceAfterRot = priceIncVat - rotDeductionAmount;
 
@@ -68,15 +82,15 @@ export function computeCostSummary(
     wasteRemovalCost,
     otherCost,
     subtotal,
-    marginPercent: margin.marginPercent,
-    marginAmount,
+    markupPercent: markup.markupPercent,
+    markupAmount,
     priceExVat,
     vatPercent,
     vatAmount,
     priceIncVat,
     rotEnabled: rot.rotEnabled,
     rotPercent: rot.rotPercent,
-    rotDeductibleLabourAmount,
+    rotEligibleAmount,
     rotDeductionAmount,
     priceAfterRot,
   };

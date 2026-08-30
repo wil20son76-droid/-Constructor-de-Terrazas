@@ -36,6 +36,8 @@ export function buildDefaultLevel(): DeckLevel {
     kortlingSpacing: 1800,
     stairs: [],
     edgeBoards: [],
+    wallEdgeIndices: [],
+    openEdgeIndices: [],
   };
 }
 
@@ -55,6 +57,12 @@ export function buildDefaultProject(name = "Ny terrass"): Project {
       rotEnabled: false,
       rotPercent: 50,
       rotMaxDeduction: 50000,
+      rotEligibility: {
+        materialEligible: false,
+        labourEligible: true,
+        machinesEligible: false,
+        transportEligible: false,
+      },
     },
     levels: [level],
     activeLevelId: level.id,
@@ -69,8 +77,8 @@ export function buildDefaultProject(name = "Ny terrass"): Project {
       workerCount: 2,
     },
     otherCosts: [],
-    margin: {
-      marginPercent: 20,
+    markup: {
+      markupPercent: 20,
       machineCost: 0,
       transportCost: 0,
       excavationCost: 0,

@@ -89,16 +89,16 @@ export function CostsPanel({ project, costs, labourItems, onUpdateProject }: Pro
 
       <Section title="Övriga kostnader">
         <Field label="Maskiner (kr)">
-          <NumField value={project.margin.machineCost} onChange={(v) => onUpdateProject((p) => ({ ...p, margin: { ...p.margin, machineCost: v } }))} />
+          <NumField value={project.markup.machineCost} onChange={(v) => onUpdateProject((p) => ({ ...p, markup: { ...p.markup, machineCost: v } }))} />
         </Field>
         <Field label="Transport (kr)">
-          <NumField value={project.margin.transportCost} onChange={(v) => onUpdateProject((p) => ({ ...p, margin: { ...p.margin, transportCost: v } }))} />
+          <NumField value={project.markup.transportCost} onChange={(v) => onUpdateProject((p) => ({ ...p, markup: { ...p.markup, transportCost: v } }))} />
         </Field>
         <Field label="Schaktning (kr)">
-          <NumField value={project.margin.excavationCost} onChange={(v) => onUpdateProject((p) => ({ ...p, margin: { ...p.margin, excavationCost: v } }))} />
+          <NumField value={project.markup.excavationCost} onChange={(v) => onUpdateProject((p) => ({ ...p, markup: { ...p.markup, excavationCost: v } }))} />
         </Field>
         <Field label="Bortforsling (kr)">
-          <NumField value={project.margin.wasteRemovalCost} onChange={(v) => onUpdateProject((p) => ({ ...p, margin: { ...p.margin, wasteRemovalCost: v } }))} />
+          <NumField value={project.markup.wasteRemovalCost} onChange={(v) => onUpdateProject((p) => ({ ...p, markup: { ...p.markup, wasteRemovalCost: v } }))} />
         </Field>
         {project.otherCosts.map((c) => (
           <div key={c.id} className="mb-1 flex gap-1">
@@ -123,12 +123,12 @@ export function CostsPanel({ project, costs, labourItems, onUpdateProject }: Pro
         </button>
       </Section>
 
-      <Section title="Marginal, moms & ROT">
-        <Field label="Marginal (%)">
+      <Section title="Påslag, moms & ROT">
+        <Field label="Påslag % (på kostnad)">
           <QuickButtons
             values={[10, 15, 20, 25, 30]}
-            current={project.margin.marginPercent}
-            onSelect={(v) => onUpdateProject((p) => ({ ...p, margin: { ...p.margin, marginPercent: v } }))}
+            current={project.markup.markupPercent}
+            onSelect={(v) => onUpdateProject((p) => ({ ...p, markup: { ...p.markup, markupPercent: v } }))}
           />
         </Field>
         <Field label="Moms (%)">
@@ -150,8 +150,33 @@ export function CostsPanel({ project, costs, labourItems, onUpdateProject }: Pro
             <Field label="Max avdrag (kr)">
               <NumField value={project.settings.rotMaxDeduction} onChange={(v) => onUpdateProject((p) => ({ ...p, settings: { ...p.settings, rotMaxDeduction: v } }))} />
             </Field>
+            <div className="mb-2 space-y-1 text-sm">
+              <p className="text-xs font-medium text-slate-600">Avdragsgilla kostnadsslag</p>
+              {(
+                [
+                  ["labourEligible", "Arbete"],
+                  ["materialEligible", "Material"],
+                  ["machinesEligible", "Maskiner"],
+                  ["transportEligible", "Transport"],
+                ] as const
+              ).map(([key, label]) => (
+                <label key={key} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={project.settings.rotEligibility[key]}
+                    onChange={(e) =>
+                      onUpdateProject((p) => ({
+                        ...p,
+                        settings: { ...p.settings, rotEligibility: { ...p.settings.rotEligibility, [key]: e.target.checked } },
+                      }))
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+            </div>
             <p className="text-xs text-slate-400">
-              Endast arbetskostnad kan vara avdragsgill. Kontrollera aktuella Skatteverket-regler och gränser.
+              Standard: endast arbetskostnad är avdragsgill. Kontrollera aktuella Skatteverket-regler och gränser innan du ändrar.
             </p>
           </>
         )}
@@ -167,8 +192,8 @@ export function CostsPanel({ project, costs, labourItems, onUpdateProject }: Pro
             <Row label="Schaktning" value={costs.excavationCost} />
             <Row label="Bortforsling" value={costs.wasteRemovalCost} />
             <Row label="Övrigt" value={costs.otherCost} />
-            <Row label="Delsumma (internt)" value={costs.subtotal} bold />
-            <Row label={`Marginal (${costs.marginPercent}%)`} value={costs.marginAmount} />
+            <Row label="Delsumma (internt, kostnad)" value={costs.subtotal} bold />
+            <Row label={`Påslag (${costs.markupPercent}%)`} value={costs.markupAmount} />
             <Row label="Pris exkl. moms" value={costs.priceExVat} bold />
             <Row label={`Moms (${costs.vatPercent}%)`} value={costs.vatAmount} />
             <Row label="Pris inkl. moms" value={costs.priceIncVat} bold />

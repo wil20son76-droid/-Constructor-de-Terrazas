@@ -1,31 +1,36 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { TopBar } from "./components/layout/TopBar";
 import { LeftPanel } from "./components/layout/LeftPanel";
 import { RightPanel } from "./components/panels/RightPanel";
 import { PlanView } from "./components/plan/PlanView";
 import { OpenProjectDialog } from "./components/layout/OpenProjectDialog";
+import { InspectorPanel } from "./components/debug/InspectorPanel";
 import { activeLevel, useProjectStore } from "./store/projectStore";
 import { useLevelCalculations } from "./hooks/useLevelCalculations";
 import { editEdgeLength, isAxisAlignedRectangle, resizeRectangleEdge } from "./geometry";
 import { bomToCsv, downloadCsv, downloadJson, printCurrentView, projectToJson } from "./export";
+import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
 
 function App() {
   const store = useProjectStore();
   const { project, viewMode } = store;
   const level = activeLevel(project);
   const [openDialogVisible, setOpenDialogVisible] = useState(false);
+  const [inspectMode, setInspectMode] = useState(false);
+  const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
 
   const calc = useLevelCalculations({
     level,
     library: project.library,
     clientSuppliedMaterialIds: project.clientSuppliedMaterialIds,
     labourRates: project.labourRates,
-    margin: project.margin,
+    markup: project.markup,
     vatPercent: project.settings.vatPercent,
     rot: {
       rotEnabled: project.settings.rotEnabled,
       rotPercent: project.settings.rotPercent,
       rotMaxDeduction: project.settings.rotMaxDeduction,
+      eligibility: project.settings.rotEligibility,
     },
     otherCostsTotal: project.otherCosts.reduce((s, c) => s + c.amount, 0),
   });
@@ -47,6 +52,14 @@ function App() {
         : [...p.clientSuppliedMaterialIds, materialId],
     }));
 
+  const inspectedDetail = useMemo(
+    () =>
+      selectedElement
+        ? resolveInspectedElement(selectedElement, level, calc.geometry, calc.cutPlans, project.library)
+        : null,
+    [selectedElement, level, calc.geometry, calc.cutPlans, project.library],
+  );
+
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-white text-slate-900">
       <TopBar
@@ -63,6 +76,11 @@ function App() {
         onExportCsv={() => downloadCsv(`${project.name}-material.csv`, bomToCsv(calc.bomLines))}
         onExportJson={() => downloadJson(`${project.name}.json`, projectToJson(project))}
         onPrint={printCurrentView}
+        inspectMode={inspectMode}
+        onToggleInspect={() => {
+          setInspectMode((v) => !v);
+          setSelectedElement(null);
+        }}
       />
       <div className="flex min-h-0 flex-1">
         <LeftPanel
@@ -74,7 +92,7 @@ function App() {
           heightAboveGround={level.heightAboveGround}
           onSetHeight={(mm) => store.updateActiveLevel((l) => ({ ...l, heightAboveGround: mm }))}
         />
-        <main className="min-w-0 flex-1">
+        <main className="relative min-w-0 flex-1">
           <PlanView
             level={level}
             geometry={calc.geometry}
@@ -90,7 +108,11 @@ function App() {
                 return { ...l, polygon: { ...l.polygon, points } };
               })
             }
+            inspectMode={inspectMode}
+            selected={selectedElement}
+            onSelectElement={setSelectedElement}
           />
+          {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
         </main>
         <RightPanel
           viewMode={viewMode}
@@ -105,6 +127,8 @@ function App() {
             footings: calc.geometry.footings.length,
             posts: calc.geometry.posts.length,
           }}
+          regelCcInfo={calc.geometry.regelCcInfo}
+          barlinaSpacingInfo={calc.geometry.barlinaSpacingInfo}
           bomLines={calc.bomLines}
           cutPlans={calc.cutPlans}
           costs={calc.costs}

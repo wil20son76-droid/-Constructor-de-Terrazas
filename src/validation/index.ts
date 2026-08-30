@@ -9,7 +9,7 @@
  * see STRUCTURAL_DISCLAIMER below, which every consumer of this module
  * should surface next to any validation results.
  */
-import type { DeckLevel, MaterialLibrary, ValidationIssue } from "../types";
+import type { CutPlanResult, DeckLevel, MaterialLibrary, ValidationIssue } from "../types";
 import { makeId } from "../geometry";
 import type { LevelGeometryResult } from "../materials";
 
@@ -23,6 +23,7 @@ export function validateLevel(
   level: DeckLevel,
   library: MaterialLibrary,
   geometry: LevelGeometryResult,
+  cutPlans: CutPlanResult[] = [],
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const warn = (message: string) => issues.push({ id: makeId("issue"), severity: "warning", message });
@@ -68,6 +69,37 @@ export function validateLevel(
   if (geometry.beams.some((b) => b.lengthMm > barlinaMaxLength)) {
     warn(
       `Minst en bärlina är längre än längsta tillgängliga längd (${barlinaMaxLength} mm) för ${barlinaMaterial?.nameSv ?? "valt bärlinamaterial"} och skulle behöva skarvas över en plint/stolpe.`,
+    );
+  }
+
+  // Safety net: CC real must never exceed the configured maximum. This is
+  // guaranteed by construction in computeUniformSpacing, but is checked
+  // here too so a future regression fails loudly instead of silently.
+  if (geometry.regelCcInfo.realSpacingMm > level.regelSpacing + 1e-6) {
+    error(
+      `Internt fel: beräknat regel-CC (${geometry.regelCcInfo.realSpacingMm.toFixed(1)} mm) överskrider konfigurerat max-CC (${level.regelSpacing} mm).`,
+    );
+  }
+  if (geometry.barlinaSpacingInfo.realSpacingMm > level.barlinaMaxSpacing + 1e-6) {
+    error(
+      `Internt fel: beräknat bärlina-avstånd (${geometry.barlinaSpacingInfo.realSpacingMm.toFixed(1)} mm) överskrider konfigurerat max-avstånd (${level.barlinaMaxSpacing} mm).`,
+    );
+  }
+  for (const spacing of geometry.plintSpacingInfoByBeam) {
+    if (spacing.realSpacingMm > level.plintMaxSpacing + 1e-6) {
+      error(
+        `Internt fel: beräknat plintavstånd (${spacing.realSpacingMm.toFixed(1)} mm) överskrider konfigurerat max-avstånd (${level.plintMaxSpacing} mm).`,
+      );
+      break;
+    }
+  }
+
+  // Trall splices: a row longer than the longest available board length
+  // needs multiple boards butt-jointed together.
+  const trallCutPlan = cutPlans.find((p) => p.materialId === level.trallMaterialId);
+  if (trallCutPlan && trallCutPlan.spliceCount > 0) {
+    warn(
+      `${trallCutPlan.spliceCount} trallrad(er) är längre än längsta tillgängliga trallängd och behöver skarvas med flera brädor per rad.`,
     );
   }
 

@@ -62,7 +62,19 @@ export interface DeckLevel {
   kortlingSpacing?: number; // mm, undefined = no blocking
   stairs: Stair[];
   edgeBoards: EdgeBoardRun[];
+  /**
+   * Polygon edge indices that sit against a house wall (no kantbräda /
+   * fascia needed there — the wall itself closes off that side). Edges
+   * carrying a Stair (matched by `Stair.edgeIndex`) are classified as
+   * "stair" edges automatically; every other edge is "external" unless
+   * listed in `openEdgeIndices`. See `deck/edgeClassification.ts`.
+   */
+  wallEdgeIndices: number[];
+  /** Edges deliberately left without any edge board (e.g. butts against another deck/zone). */
+  openEdgeIndices: number[];
 }
+
+export type EdgeType = "external" | "wall" | "stair" | "open";
 
 /** A single computed/placed deck board (result of the layout engine). */
 export interface DeckBoard {
@@ -132,6 +144,8 @@ export interface StructuralMember {
   start: Point;
   end: Point;
   lengthMm: number;
+  /** e.g. "45x120" — the material's cross-section, for the debug/inspect view. */
+  dimension?: string;
 }
 
 export type Joist = StructuralMember; // Regel
@@ -149,6 +163,8 @@ export interface Footing {
   typeId: string;
   position: Point;
   label: string; // P1, P2, ...
+  /** The bärlina (Beam.id) this footing supports. */
+  beamId: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -216,29 +232,83 @@ export interface Fastener {
 
 export type BomGroup = "TRALL" | "STOMME" | "PLINTAR" | "INFASTNING" | "TRAPPA" | "OVRIGT";
 
+/**
+ * A bill-of-materials line. Two distinct quantities are tracked and must
+ * never be conflated (see CALCULATION_AUDIT.md):
+ *
+ *  - TECHNICAL quantity (`technicalQuantity` / `technicalLinearMeters`):
+ *    what the design actually needs — e.g. 73.4 linear metres of trall.
+ *    This is what the plan/drawing and the "material needed" figures show.
+ *  - PURCHASE quantity (`purchaseQuantity` / `purchaseLinearMeters` /
+ *    `purchaseBreakdown`): what must actually be bought given commercial
+ *    stock lengths and cut optimisation — e.g. 18 boards x 4.8 m = 86.4 m.
+ *    This is what cost calculations use (`purchaseTotal`).
+ */
 export interface BomLine {
   materialId: string;
   group: BomGroup;
   materialName: string;
   dimension: string;
-  lengthMm?: number;
-  quantity: number;
   unit: string;
-  linearMeters?: number;
+  /** Technical quantity: pieces/units the design needs (e.g. 25 joists, 220 screws). */
+  technicalQuantity: number;
+  /** Technical quantity in linear metres, for lumber items (sum of required piece lengths). */
+  technicalLinearMeters?: number;
   pricePerUnit: number;
-  subtotal: number;
+  /** Cost at the technical quantity — informational only (what the plan needs), never billed. */
+  technicalCost: number;
   wastePercent: number;
-  purchaseQuantity: number; // quantity incl. waste, rounded up to purchasable units
+  /** Purchase quantity: stock boards/packages/units actually bought (>= technical, rounded to buyable units). */
+  purchaseQuantity: number;
+  /** Purchase quantity in linear metres actually bought, for lumber items. */
+  purchaseLinearMeters?: number;
+  /** Stock purchases grouped by commercial length, for lumber items (e.g. "18 x 4.8 m"). */
+  purchaseBreakdown?: PurchasedBoardGroup[];
+  /** Cost at the purchase quantity — this is what is billed and feeds the cost summary. */
   purchaseTotal: number;
   suppliedByClient?: boolean;
 }
 
+/** One physical stock board purchased, and which piece-segments it was cut into. */
+export interface CutBin {
+  index: number;
+  stockLengthMm: number;
+  items: CutBinItem[];
+  usedMm: number;
+  offcutMm: number;
+}
+
+export interface CutBinItem {
+  /** Index of the original (pre-split) required piece/row this segment belongs to. */
+  sourceIndex: number;
+  /** 0-based index of this segment within its source piece's segments. */
+  segmentIndex: number;
+  /** How many segments the source piece was split into (1 = no splice needed). */
+  totalSegments: number;
+  lengthMm: number;
+}
+
+export interface PurchasedBoardGroup {
+  lengthMm: number;
+  count: number;
+}
+
 export interface CutPlanResult {
   materialId: string;
+  /** Sum of the ORIGINAL (pre-split) required piece lengths — the technical quantity, mm. */
   requiredLengthMm: number;
   availableLengthsMm: number[];
-  chosenLengthMm: number;
-  fullBoardsNeeded: number;
+  /** Number of original pieces/rows requested (before any splicing). */
+  piecesCount: number;
+  /** Number of physical segments actually cut, after splicing runs longer than any single stock length. */
+  segmentsCount: number;
+  /** Number of original pieces that needed more than one physical segment (spliced). */
+  spliceCount: number;
+  bins: CutBin[];
+  /** Stock purchases grouped by length, for display ("18 x 4.8 m"). */
+  purchasedBreakdown: PurchasedBoardGroup[];
+  totalPurchasedLengthMm: number;
+  totalPurchasedCount: number;
   offcutsReusable: number;
   wasteMm: number;
   wastePercent: number;
@@ -284,16 +354,23 @@ export interface CostSummary {
   excavationCost: number;
   wasteRemovalCost: number;
   otherCost: number;
-  subtotal: number; // internal cost before margin
-  marginPercent: number;
-  marginAmount: number;
+  subtotal: number; // internal cost, before påslag (markup)
+  /**
+   * Påslag (markup on cost), NOT margin: sellingPrice = cost * (1 + markupPercent / 100).
+   * E.g. cost 100, markup 20% -> 120. This is mathematically different from
+   * a margin ("sellingPrice such that markup/sellingPrice = X%"), which is
+   * why the UI must always label this "Påslag %", never "Marginal".
+   */
+  markupPercent: number;
+  markupAmount: number;
   priceExVat: number;
   vatPercent: number; // moms
   vatAmount: number;
   priceIncVat: number;
   rotEnabled: boolean;
   rotPercent: number;
-  rotDeductibleLabourAmount: number;
+  /** Sum of the cost categories the user has marked ROT-eligible (see RotEligibility). */
+  rotEligibleAmount: number;
   rotDeductionAmount: number;
   priceAfterRot: number;
 }
@@ -322,6 +399,20 @@ export interface Quotation {
 // Project (root aggregate, persisted)
 // ---------------------------------------------------------------------------
 
+/**
+ * Which cost categories count toward the ROT-avdrag base. Swedish tax
+ * rules change over time and are never hard-coded here — only labour is
+ * eligible by default (materials, transport and machines are not, per
+ * current practice), but every flag is user-configurable so the app
+ * keeps working when the rules change.
+ */
+export interface RotEligibility {
+  materialEligible: boolean;
+  labourEligible: boolean;
+  machinesEligible: boolean;
+  transportEligible: boolean;
+}
+
 export interface ProjectSettings {
   gridSizeMm: number; // 100 | 500 | 1000
   snapEnabled: boolean;
@@ -330,6 +421,7 @@ export interface ProjectSettings {
   rotEnabled: boolean;
   rotPercent: number;
   rotMaxDeduction: number;
+  rotEligibility: RotEligibility;
 }
 
 export interface MaterialLibrary {
@@ -357,8 +449,9 @@ export interface Project {
   library: MaterialLibrary;
   labourRates: LabourRates;
   otherCosts: CostItem[];
-  margin: {
-    marginPercent: number;
+  markup: {
+    /** Påslag %: sellingPrice = cost * (1 + markupPercent / 100). Not a margin. */
+    markupPercent: number;
     machineCost: number;
     transportCost: number;
     excavationCost: number;

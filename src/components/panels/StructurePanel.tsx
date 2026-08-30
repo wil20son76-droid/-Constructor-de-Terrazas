@@ -1,5 +1,7 @@
 import type { DeckLevel, MaterialLibrary, ValidationIssue } from "../../types";
+import type { UniformSpacingResult } from "../../structural";
 import { STRUCTURAL_DISCLAIMER } from "../../validation";
+import { formatMm } from "../../utils/format";
 import { Field, inputClass, MaterialSelect, QuickButtons, Section } from "./common";
 
 interface Props {
@@ -7,10 +9,27 @@ interface Props {
   library: MaterialLibrary;
   validation: ValidationIssue[];
   jointCount: { joists: number; beams: number; footings: number; posts: number };
+  regelCcInfo: UniformSpacingResult;
+  barlinaSpacingInfo: UniformSpacingResult;
   onUpdate: (fn: (level: DeckLevel) => DeckLevel) => void;
 }
 
-export function StructurePanel({ level, library, validation, jointCount, onUpdate }: Props) {
+function CcSummary({ info }: { info: UniformSpacingResult }) {
+  return (
+    <dl className="mt-1.5 grid grid-cols-2 gap-x-2 gap-y-0.5 rounded bg-slate-50 px-2 py-1.5 text-xs">
+      <dt className="text-slate-500">CC max</dt>
+      <dd className="text-right font-medium">{formatMm(info.maxSpacingMm)}</dd>
+      <dt className="text-slate-500">CC verklig</dt>
+      <dd className="text-right font-medium">{formatMm(info.realSpacingMm)}</dd>
+      <dt className="text-slate-500">Antal fack</dt>
+      <dd className="text-right font-medium">{info.numberOfSpaces}</dd>
+      <dt className="text-slate-500">Antal element</dt>
+      <dd className="text-right font-medium">{info.numberOfMembers}</dd>
+    </dl>
+  );
+}
+
+export function StructurePanel({ level, library, validation, jointCount, regelCcInfo, barlinaSpacingInfo, onUpdate }: Props) {
   return (
     <div className="h-full overflow-y-auto">
       <Section title="Reglar">
@@ -36,6 +55,7 @@ export function StructurePanel({ level, library, validation, jointCount, onUpdat
           />
         </Field>
         <div className="text-xs text-slate-500">Antal reglar: {jointCount.joists} st</div>
+        <CcSummary info={regelCcInfo} />
       </Section>
 
       <Section title="Bärlinor">
@@ -56,6 +76,7 @@ export function StructurePanel({ level, library, validation, jointCount, onUpdat
           />
         </Field>
         <div className="text-xs text-slate-500">Antal bärlinor: {jointCount.beams} st</div>
+        <CcSummary info={barlinaSpacingInfo} />
       </Section>
 
       <Section title="Plintar">

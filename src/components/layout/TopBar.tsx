@@ -14,6 +14,8 @@ interface TopBarProps {
   onExportCsv: () => void;
   onExportJson: () => void;
   onPrint: () => void;
+  inspectMode: boolean;
+  onToggleInspect: () => void;
 }
 
 const viewTabs: { id: ViewMode; label: string }[] = [
@@ -78,6 +80,17 @@ export function TopBar(props: TopBarProps) {
       </div>
 
       <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={props.onToggleInspect}
+          title="Visa teknisk data för valt element (fila/segment/stock/retal)"
+          className={`rounded px-2.5 py-1.5 text-sm ${
+            props.inspectMode ? "bg-blue-600 text-white" : "text-slate-700 hover:bg-slate-200"
+          }`}
+        >
+          🔍 Inspect
+        </button>
+        <div className="mx-1 h-5 w-px bg-slate-300" />
         <TopBarButton label="Exportera CSV" onClick={props.onExportCsv} />
         <TopBarButton label="Exportera JSON" onClick={props.onExportJson} />
         <TopBarButton label="Skriv ut" onClick={props.onPrint} />
