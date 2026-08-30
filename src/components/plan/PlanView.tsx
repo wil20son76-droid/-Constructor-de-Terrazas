@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState } from "react";
-import type { DeckLevel } from "../../types";
+import type { DeckLevel, DeckSection } from "../../types";
 import type { LevelGeometryResult } from "../../materials";
 import { boundingBox, snapToGrid } from "../../geometry";
 import type { ViewMode } from "../../store/projectStore";
@@ -18,7 +18,7 @@ interface ViewBox {
  * plain pan/zoom + click-a-dimension-to-edit-length, unchanged from before
  * this feature existed. Picking any other tool is an explicit opt-in.
  */
-export type VertexEditTool = "none" | "select" | "add-point" | "add-point-on-edge" | "delete-point" | "measure";
+export type VertexEditTool = "none" | "select" | "add-point" | "add-point-on-edge" | "delete-point" | "measure" | "dela-sektion";
 
 interface PlanViewProps {
   level: DeckLevel;
@@ -35,11 +35,16 @@ interface PlanViewProps {
   drawingMode?: boolean;
   onFinishDrawing?: (points: { x: number; y: number }[]) => void;
   onCancelDrawing?: () => void;
-  /** "Redigera form": vertex select/move, add/delete point, measure. */
+  /** "Redigera form": vertex select/move, add/delete point, measure, dela sektion. */
   editTool?: VertexEditTool;
   onMoveVertex?: (index: number, point: { x: number; y: number }) => void;
   onInsertPointOnEdge?: (edgeIndex: number, t: number) => void;
   onDeleteVertex?: (index: number) => void;
+  /** "Dela sektion": splits either the level polygon (no sections yet) or one existing section into two. */
+  sections?: DeckSection[];
+  splitTargetSectionId?: string | null;
+  onSetSplitTargetSectionId?: (id: string) => void;
+  onConfirmSplit?: (indexA: number, indexB: number) => void;
 }
 
 /** Parametric position (clamped 0..1) of the closest point on segment a->b to p. */
@@ -82,6 +87,10 @@ export function PlanView({
   onMoveVertex,
   onInsertPointOnEdge,
   onDeleteVertex,
+  sections = [],
+  splitTargetSectionId = null,
+  onSetSplitTargetSectionId,
+  onConfirmSplit,
 }: PlanViewProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [viewBox, setViewBox] = useState<ViewBox>(() => bboxWithPadding(level.polygon.points));
@@ -106,6 +115,13 @@ export function PlanView({
   // "Mät avstånd": click two points to measure the distance between them.
   const [measurePoints, setMeasurePoints] = useState<{ x: number; y: number }[]>([]);
   const [measureCursor, setMeasureCursor] = useState<{ x: number; y: number } | null>(null);
+
+  // "Dela sektion": pick two existing vertices of the split target (the
+  // level's own polygon when there are no sections yet, otherwise the
+  // section named by splitTargetSectionId) to define the dividing chord.
+  const [splitPicks, setSplitPicks] = useState<number[]>([]);
+  const splitTargetPoints =
+    splitTargetSectionId !== null ? (sections.find((s) => s.id === splitTargetSectionId)?.polygon.points ?? level.polygon.points) : level.polygon.points;
 
   const fitToView = () => setViewBox(bboxWithPadding(level.polygon.points));
 
@@ -311,6 +327,47 @@ export function PlanView({
           <polygon key={o.id} points={polygonPointsAttr(o.points)} fill="#f8fafc" stroke="#94a3b8" strokeWidth={strokePx * 0.6} />
         ))}
 
+        {/* Section boundaries (each has its own board direction/material — see materials/index.ts). */}
+        {sections.map((sec) => {
+          const c = boundingBox(sec.polygon.points);
+          const cx = (c.minX + c.maxX) / 2;
+          const cy = (c.minY + c.maxY) / 2;
+          const isSplitTarget = editTool === "dela-sektion" && splitTargetSectionId === sec.id;
+          return (
+            <g key={sec.id} pointerEvents="none">
+              <polygon
+                points={polygonPointsAttr(sec.polygon.points)}
+                fill="none"
+                stroke={isSplitTarget ? "#f59e0b" : "#7c3aed"}
+                strokeWidth={isSplitTarget ? strokePx * 1.5 : strokePx * 0.8}
+                strokeDasharray={`${strokePx * 2} ${strokePx}`}
+              />
+              <text x={cx} y={cy} fontSize={fontPx * 0.6} textAnchor="middle" fill="#7c3aed" style={{ paintOrder: "stroke", stroke: "white", strokeWidth: fontPx * 0.15 }}>
+                {sec.name}
+              </text>
+            </g>
+          );
+        })}
+
+        {/* "Dela sektion" step 1: pick which section to further subdivide (only shown once sections exist). */}
+        {editTool === "dela-sektion" &&
+          sections.length > 0 &&
+          sections.map((sec) => (
+            <polygon
+              key={`split-target-${sec.id}`}
+              points={polygonPointsAttr(sec.polygon.points)}
+              fill={splitTargetSectionId === sec.id ? "transparent" : "rgba(124,58,237,0.03)"}
+              stroke="none"
+              style={{ cursor: splitTargetSectionId === sec.id ? "default" : "pointer" }}
+              onClick={(e) => {
+                if (splitTargetSectionId === sec.id) return;
+                e.stopPropagation();
+                setSplitPicks([]);
+                onSetSplitTargetSectionId?.(sec.id);
+              }}
+            />
+          ))}
+
         {showBoards &&
           geometry.boards.map((b, i) => {
             const isSelected = inspectMode && selected?.type === "trall" && selected.index === i;
@@ -478,6 +535,55 @@ export function PlanView({
           </g>
         )}
 
+        {/* "Dela sektion" step 2: pick two vertices of the target polygon to define the dividing chord. */}
+        {editTool === "dela-sektion" && (splitTargetSectionId !== null || sections.length === 0) && (
+          <g>
+            {splitTargetPoints.map((p, i) => {
+              const pickOrder = splitPicks.indexOf(i);
+              const picked = pickOrder !== -1;
+              return (
+                <g key={`split-vertex-${i}`}>
+                  <circle
+                    data-role="split-vertex"
+                    data-index={i}
+                    cx={p.x}
+                    cy={p.y}
+                    r={strokePx * 6}
+                    fill={picked ? "#16a34a" : "#f59e0b"}
+                    stroke="white"
+                    strokeWidth={strokePx * 0.8}
+                    style={{ cursor: "pointer" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSplitPicks((prev) => {
+                        if (prev.includes(i)) return prev.filter((x) => x !== i);
+                        if (prev.length >= 2) return [prev[1], i];
+                        return [...prev, i];
+                      });
+                    }}
+                  />
+                  <text x={p.x} y={p.y - strokePx * 9} fontSize={fontPx * 0.55} textAnchor="middle" fill="#1e3a8a">
+                    P{i + 1}
+                    {picked ? ` (${pickOrder + 1})` : ""}
+                  </text>
+                </g>
+              );
+            })}
+            {splitPicks.length === 2 && (
+              <line
+                x1={splitTargetPoints[splitPicks[0]].x}
+                y1={splitTargetPoints[splitPicks[0]].y}
+                x2={splitTargetPoints[splitPicks[1]].x}
+                y2={splitTargetPoints[splitPicks[1]].y}
+                stroke="#16a34a"
+                strokeDasharray={`${strokePx * 3} ${strokePx * 2}`}
+                strokeWidth={strokePx * 1.2}
+                pointerEvents="none"
+              />
+            )}
+          </g>
+        )}
+
         {/* "Mät avstånd": click two points to measure the distance between them. */}
         {editTool === "measure" &&
           measurePoints.length > 0 &&
@@ -616,6 +722,26 @@ export function PlanView({
         >
           Rensa mätning
         </button>
+      ) : editTool === "dela-sektion" && splitPicks.length === 2 ? (
+        <div className="absolute bottom-3 right-3 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSplitPicks([])}
+            className="rounded bg-white px-2 py-1 text-xs shadow hover:bg-slate-100"
+          >
+            Avbryt
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onConfirmSplit?.(splitPicks[0], splitPicks[1]);
+              setSplitPicks([]);
+            }}
+            className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white shadow"
+          >
+            Dela sektion
+          </button>
+        </div>
       ) : (
         <button
           type="button"

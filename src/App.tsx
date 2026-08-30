@@ -7,9 +7,10 @@ import { OpenProjectDialog } from "./components/layout/OpenProjectDialog";
 import { InspectorPanel } from "./components/debug/InspectorPanel";
 import { activeLevel, useProjectStore } from "./store/projectStore";
 import { useLevelCalculations } from "./hooks/useLevelCalculations";
-import { editEdgeLength, insertPointOnEdge, isAxisAlignedRectangle, makeId, resizeRectangleEdge, validatePolygon } from "./geometry";
+import { editEdgeLength, insertPointOnEdge, isAxisAlignedRectangle, makeId, resizeRectangleEdge, splitPolygon, validatePolygon } from "./geometry";
 import { bomToCsv, downloadCsv, downloadJson, printCurrentView, projectToJson } from "./export";
 import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
+import type { DeckSection } from "./types";
 
 function App() {
   const store = useProjectStore();
@@ -20,6 +21,52 @@ function App() {
   const [selectedElement, setSelectedElement] = useState<SelectedElement | null>(null);
   const [freeFormMode, setFreeFormMode] = useState(false);
   const [editTool, setEditTool] = useState<VertexEditTool>("none");
+  const [splitTargetSectionId, setSplitTargetSectionId] = useState<string | null>(null);
+
+  const handleConfirmSplit = (indexA: number, indexB: number) => {
+    const trallMaterial = project.library.materials.find((m) => m.id === level.trallMaterialId);
+    const boardWidthMm = trallMaterial?.widthMm ?? 120;
+    const boardThicknessMm = trallMaterial?.thicknessMm ?? 28;
+    const existingSections = level.sections ?? [];
+
+    let nextSections: DeckSection[];
+    try {
+      if (existingSections.length === 0) {
+        const [partA, partB] = splitPolygon(level.polygon.points, indexA, indexB);
+        const base = {
+          boardDirection: level.boardDirection,
+          boardWidthMm,
+          boardThicknessMm,
+          boardGap: level.boardGap,
+          materialId: level.trallMaterialId,
+          fastenerSystemId: level.fastenerSystemId,
+        };
+        nextSections = [
+          { id: makeId("section"), name: "Sektion 1", polygon: { id: makeId("poly"), points: partA }, ...base },
+          { id: makeId("section"), name: "Sektion 2", polygon: { id: makeId("poly"), points: partB }, ...base },
+        ];
+      } else {
+        const target = existingSections.find((s) => s.id === splitTargetSectionId);
+        if (!target) return;
+        const [partA, partB] = splitPolygon(target.polygon.points, indexA, indexB);
+        const replacement: DeckSection[] = [
+          { ...target, id: makeId("section"), polygon: { id: makeId("poly"), points: partA } },
+          { ...target, id: makeId("section"), polygon: { id: makeId("poly"), points: partB } },
+        ];
+        nextSections = existingSections
+          .flatMap((s) => (s.id === target.id ? replacement : [s]))
+          .map((s, i) => ({ ...s, name: `Sektion ${i + 1}` }));
+      }
+    } catch {
+      window.alert(
+        "Kunde inte dela sektionen med de valda punkterna — en sektion med bara 3 hörn (en triangel) kan inte delas vidare på det sättet. Lägg till en punkt på en kant först om du behöver dela den.",
+      );
+      return;
+    }
+
+    store.updateActiveLevel((l) => ({ ...l, sections: nextSections }));
+    setSplitTargetSectionId(nextSections[0].id);
+  };
 
   const calc = useLevelCalculations({
     level,
@@ -102,7 +149,11 @@ function App() {
           onSetEditTool={(tool) => {
             setFreeFormMode(false);
             setEditTool(tool);
+            setSplitTargetSectionId(tool === "dela-sektion" ? (level.sections?.[0]?.id ?? null) : null);
           }}
+          sections={level.sections}
+          splitTargetSectionId={splitTargetSectionId}
+          onSetSplitTargetSectionId={setSplitTargetSectionId}
         />
         <main className="relative min-w-0 flex-1">
           <PlanView
@@ -159,6 +210,10 @@ function App() {
                 polygon: { ...l.polygon, points: l.polygon.points.filter((_, i) => i !== index) },
               }))
             }
+            sections={level.sections}
+            splitTargetSectionId={splitTargetSectionId}
+            onSetSplitTargetSectionId={setSplitTargetSectionId}
+            onConfirmSplit={handleConfirmSplit}
           />
           {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
         </main>

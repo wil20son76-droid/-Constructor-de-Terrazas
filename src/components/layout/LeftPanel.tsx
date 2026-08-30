@@ -1,5 +1,5 @@
 import { lShapePolygon, rectanglePolygon, uShapePolygon } from "../../geometry";
-import type { DeckPolygon } from "../../types";
+import type { DeckPolygon, DeckSection } from "../../types";
 import type { VertexEditTool } from "../plan/PlanView";
 
 interface LeftPanelProps {
@@ -14,6 +14,9 @@ interface LeftPanelProps {
   onStartFreeForm?: () => void;
   editTool?: VertexEditTool;
   onSetEditTool?: (tool: VertexEditTool) => void;
+  sections?: DeckSection[];
+  splitTargetSectionId?: string | null;
+  onSetSplitTargetSectionId?: (id: string) => void;
 }
 
 const gridOptions = [100, 500, 1000];
@@ -104,6 +107,39 @@ export function LeftPanel(props: LeftPanelProps) {
           {props.editTool === "delete-point" && "Klicka på en punkt för att ta bort den (minst 3 kvar)."}
           {props.editTool === "measure" && "Klicka två punkter i planen för att mäta avståndet."}
           {(!props.editTool || props.editTool === "none") && "Välj ett verktyg för att redigera formens punkter."}
+        </p>
+      </Section>
+
+      <Section title="Sektioner">
+        <button
+          type="button"
+          className={`w-full rounded border px-2 py-1.5 text-left text-sm ${
+            props.editTool === "dela-sektion" ? "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-300 hover:bg-slate-50"
+          }`}
+          onClick={() => props.onSetEditTool?.(props.editTool === "dela-sektion" ? "none" : "dela-sektion")}
+        >
+          ✂️ Dela sektion
+        </button>
+        {props.editTool === "dela-sektion" && (props.sections?.length ?? 0) > 0 && (
+          <label className="mt-2 block text-sm">
+            <span className="mb-1 block text-xs font-medium text-slate-600">Dela vidare i</span>
+            <select
+              className="w-full rounded border border-slate-300 px-2 py-1 text-sm"
+              value={props.splitTargetSectionId ?? ""}
+              onChange={(e) => props.onSetSplitTargetSectionId?.(e.target.value)}
+            >
+              {(props.sections ?? []).map((sec) => (
+                <option key={sec.id} value={sec.id}>
+                  {sec.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <p className="mt-2 text-xs text-slate-400">
+          {props.editTool === "dela-sektion"
+            ? "Klicka två punkter i planen för att dra en delningslinje, bekräfta sedan. Varje sektion kan få egen trallriktning nedan."
+            : "Dela terrassen i oberoende trallsektioner, var och en med egen riktning och material."}
         </p>
       </Section>
 
