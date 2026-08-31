@@ -172,6 +172,26 @@ export function resolveLumberPurchaseCost({ priceModel, byLength, vatPercent, wi
   return { cost: exklPrice * totalPieces, missing: exklPrice === 0, priceUnit: "kr/st", supplier };
 }
 
+/**
+ * Cost of ONE board of a given stock length — what the cut optimiser
+ * (materials/cutOptimization.ts's `costPerLengthMm`) needs while it's
+ * still deciding which length to buy, before a final purchasedBreakdown
+ * exists. Same per-length-first rule as resolveLumberPurchaseCost: a
+ * stock variant for that exact length wins; otherwise the flat kr/m (or
+ * kr/st) rate applies.
+ */
+export function makeCostPerLengthFn(priceModel: MaterialPriceModel, vatPercent: number): (lengthMm: number) => number {
+  return (lengthMm: number) => {
+    const variant = findStockVariant(priceModel.stockVariants, lengthMm);
+    if (variant) {
+      const exkl = normalizeExklMoms(variant.price, variant.vatMode ?? priceModel.vatMode, vatPercent);
+      return variant.priceUnit === "kr/m" || variant.priceUnit === "kr/lm" ? exkl * (lengthMm / 1000) : exkl;
+    }
+    const exklBase = normalizeExklMoms(priceModel.price, priceModel.vatMode, vatPercent);
+    return priceModel.priceUnit === "kr/m" || priceModel.priceUnit === "kr/lm" ? exklBase * (lengthMm / 1000) : exklBase;
+  };
+}
+
 /** Same cost formula for a non-lineal (unit/package/area) purchase — see the module doc for the per-PriceUnit formulas. */
 export function resolveUnitPurchaseCost(
   priceModel: MaterialPriceModel,

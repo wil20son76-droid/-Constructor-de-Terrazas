@@ -52,6 +52,21 @@ describe("cut optimization modes", () => {
     expect(plan.purchasedBreakdown).toEqual([{ lengthMm: 3600, count: 2 }]);
   });
 
+  it("minCost scores by cost PER PIECE SERVED, not raw board price — a cheap board that only fits one piece can lose to a pricier board that fits two", () => {
+    // Two 2.1 m pieces; stock 3.6 m at 50 kr (cheap alone, holds only ONE
+    // 2.1 m piece) vs 4.2 m at 90 kr (pricier alone, but holds BOTH 2.1 m
+    // pieces exactly). Raw-price comparison would wrongly pick 3.6 m twice
+    // (2 x 50 = 100 kr); per-piece cost correctly prefers 4.2 m (90/2 = 45
+    // < 50), landing both pieces in ONE board at 90 kr — genuinely cheaper.
+    const cheap36Expensive42 = (lengthMm: number) => (lengthMm === 3600 ? 50 : lengthMm === 4200 ? 90 : Infinity);
+    const plan = computeCutPlan("m1", [2100, 2100], [3600, 4200], { mode: "minCost", costPerLengthMm: cheap36Expensive42 });
+    expect(plan.purchasedBreakdown).toEqual([{ lengthMm: 4200, count: 1 }]);
+    expect(plan.totalPurchasedCount).toBe(1);
+    const totalCost = plan.purchasedBreakdown.reduce((s, g) => s + g.count * cheap36Expensive42(g.lengthMm), 0);
+    expect(totalCost).toBe(90);
+    expect(totalCost).toBeLessThan(2 * 50); // cheaper than the naive raw-price choice would have been
+  });
+
   it("packSegments with minCost mode produces the same bins as computeCutPlan for a single-segment-per-piece case", () => {
     const bins = packSegments(
       [

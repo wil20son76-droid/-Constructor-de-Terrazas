@@ -76,13 +76,17 @@ export function splitRunsToMaxLength(lengthsMm: number[], maxLengthMm: number): 
   return buildPieceSegments(lengthsMm, maxLengthMm).map((s) => s.lengthMm);
 }
 
-/** Simulates first-fit packing of `segments` (in order) into `startingRemaining` mm; returns leftover space. */
-function simulateGreedyFill(startingRemainingMm: number, segments: PieceSegment[]): number {
+/** Simulates first-fit packing of `segments` (in order) into `startingRemaining` mm; returns leftover space and how many segments it actually absorbed. */
+function simulateGreedyFill(startingRemainingMm: number, segments: PieceSegment[]): { leftoverMm: number; absorbed: number } {
   let remaining = startingRemainingMm;
+  let absorbed = 0;
   for (const seg of segments) {
-    if (seg.lengthMm <= remaining + 1e-9) remaining -= seg.lengthMm;
+    if (seg.lengthMm <= remaining + 1e-9) {
+      remaining -= seg.lengthMm;
+      absorbed++;
+    }
   }
-  return Math.max(0, remaining);
+  return { leftoverMm: Math.max(0, remaining), absorbed };
 }
 
 export interface PackOptions {
@@ -96,6 +100,8 @@ interface NewBinCandidate {
   length: number;
   waste: number;
   cost: number;
+  /** How many of the lookahead pieces this board's leftover space would also absorb (see simulateGreedyFill). */
+  absorbed: number;
 }
 
 /**
@@ -105,10 +111,21 @@ interface NewBinCandidate {
  *    the shortest length (the original, cost-unaware heuristic — used
  *    whenever no cost function is supplied, so existing callers/tests see
  *    byte-identical output).
- *  - minCost: minimise the cost of the one board being bought right now,
- *    tie-broken by waste.
- *  - balanced: minimise waste and cost, each normalised against the other
- *    candidates in this decision so neither dimension's scale dominates.
+ *  - minCost / balanced: score by `cost / (1 + absorbed)` — the price of
+ *    this ONE board spread over every piece it actually serves (itself
+ *    plus however many lookahead pieces fit in its leftover space) — NOT
+ *    the board's raw price. A raw-price comparison would greedily buy the
+ *    cheapest single board for the current piece while ignoring that a
+ *    pricier, longer board might avoid a second board entirely — e.g. two
+ *    2.1 m pieces at a flat kr/m rate: a 3.6 m board (cheaper per board,
+ *    holds only one) still costs MORE in total than one 4.2 m board that
+ *    holds both, since 2x3.6m > 1x4.2m at the same rate. Dividing by
+ *    pieces-served fixes this: the 4.2 m board's effective per-piece cost
+ *    is half its price, correctly beating the 3.6 m board's un-shared
+ *    price.
+ *    minCost: pure minimum per-piece cost, tied-broken by waste. balanced:
+ *    per-piece cost and waste each normalised against the other
+ *    candidates in this decision, summed, minimised.
  */
 function pickCandidate(candidates: NewBinCandidate[], mode: CutOptimizationMode, hasCost: boolean): number | null {
   if (candidates.length === 0) return null;
@@ -117,27 +134,36 @@ function pickCandidate(candidates: NewBinCandidate[], mode: CutOptimizationMode,
     for (const c of candidates.slice(1)) if (c.waste < best.waste - 1e-9) best = c;
     return best.length;
   }
+  const costPerPiece = (c: NewBinCandidate) => c.cost / (1 + c.absorbed);
   if (mode === "minCost") {
     let best = candidates[0];
+    let bestCpp = costPerPiece(best);
     for (const c of candidates.slice(1)) {
-      if (c.cost < best.cost - 1e-9) best = c;
-      else if (Math.abs(c.cost - best.cost) <= 1e-9 && c.waste < best.waste - 1e-9) best = c;
+      const cpp = costPerPiece(c);
+      if (cpp < bestCpp - 1e-9) {
+        best = c;
+        bestCpp = cpp;
+      } else if (Math.abs(cpp - bestCpp) <= 1e-9 && c.waste < best.waste - 1e-9) {
+        best = c;
+        bestCpp = cpp;
+      }
     }
     return best.length;
   }
   // balanced
+  const cpps = candidates.map(costPerPiece);
   const maxWaste = Math.max(...candidates.map((c) => c.waste), 1e-9);
-  const maxCost = Math.max(...candidates.map((c) => c.cost), 1e-9);
-  let best = candidates[0];
-  let bestScore = best.waste / maxWaste + best.cost / maxCost;
-  for (const c of candidates.slice(1)) {
-    const score = c.waste / maxWaste + c.cost / maxCost;
+  const maxCpp = Math.max(...cpps, 1e-9);
+  let bestIdx = 0;
+  let bestScore = candidates[0].waste / maxWaste + cpps[0] / maxCpp;
+  for (let i = 1; i < candidates.length; i++) {
+    const score = candidates[i].waste / maxWaste + cpps[i] / maxCpp;
     if (score < bestScore - 1e-9) {
-      best = c;
+      bestIdx = i;
       bestScore = score;
     }
   }
-  return best.length;
+  return candidates[bestIdx].length;
 }
 
 export function packSegments(segments: PieceSegment[], availableLengthsMm: number[], options: PackOptions = {}): CutBin[] {
@@ -176,9 +202,9 @@ export function packSegments(segments: PieceSegment[], availableLengthsMm: numbe
     const candidates: NewBinCandidate[] = [];
     for (const length of sortedLengths) {
       if (length + 1e-9 < seg.lengthMm) continue; // doesn't even fit this piece
-      const waste = simulateGreedyFill(length - seg.lengthMm, lookahead);
+      const { leftoverMm: waste, absorbed } = simulateGreedyFill(length - seg.lengthMm, lookahead);
       const cost = costPerLengthMm ? costPerLengthMm(length) : 0;
-      candidates.push({ length, waste, cost });
+      candidates.push({ length, waste, cost, absorbed });
     }
     const chosenLength = pickCandidate(candidates, mode, !!costPerLengthMm);
     // No available stock is long enough for this single piece: it must be
