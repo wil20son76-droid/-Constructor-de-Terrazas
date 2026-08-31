@@ -98,6 +98,8 @@ function App() {
       eligibility: project.settings.rotEligibility,
     },
     otherCostsTotal: project.otherCosts.reduce((s, c) => s + c.amount, 0),
+    materialOverrides: project.materialOverrides,
+    cutOptimizationMode: project.settings.cutOptimizationMode,
   });
 
   const handleNew = () => {

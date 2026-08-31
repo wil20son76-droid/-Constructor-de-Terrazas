@@ -11,6 +11,7 @@ import type {
   Beam,
   BomGroup,
   BomLine,
+  CutOptimizationMode,
   CutPlanResult,
   DeckBoard,
   DeckLevel,
@@ -19,6 +20,7 @@ import type {
   Joist,
   MaterialLibrary,
   Post,
+  ProjectMaterialOverride,
 } from "../types";
 import { computeAreaSummary } from "../geometry";
 import { computeAllSectionsBoardLayout, computeBoardLayout, type BoardLayoutResult } from "../deck/boardLayout";
@@ -36,6 +38,15 @@ import {
 import { computeStair, type StairCalculationResult } from "../structural/stairs";
 import { computeFastenerCounts } from "./fasteners";
 import { computeCutPlan } from "./cutOptimization";
+import {
+  makeCostPerLengthFn,
+  normalizeExklMoms,
+  resolveEffectivePriceModel,
+  resolveLumberPurchaseCost,
+  resolveUnitPurchaseCost,
+} from "../pricing/materialPricing";
+
+const DEFAULT_CUT_OPTIMIZATION_MODE: CutOptimizationMode = "minCost";
 
 export interface LevelGeometryResult {
   boards: DeckBoard[];
@@ -153,9 +164,24 @@ function groupTrallBoardsByMaterial(boards: DeckBoard[], fallbackMaterialId: str
   return map;
 }
 
-function purchaseUnitCount(quantity: number, unitsPerPackage?: number): number {
-  if (!unitsPerPackage || unitsPerPackage <= 1) return Math.ceil(quantity);
-  return Math.ceil(quantity / unitsPerPackage);
+/** Everything the pricing/optimisation engines need that isn't already carried on the DeckLevel/MaterialLibrary. */
+export interface PricingContext {
+  vatPercent: number;
+  materialOverrides: ProjectMaterialOverride[];
+  cutOptimizationMode: CutOptimizationMode;
+}
+
+export function defaultPricingContext(): PricingContext {
+  return { vatPercent: 25, materialOverrides: [], cutOptimizationMode: DEFAULT_CUT_OPTIMIZATION_MODE };
+}
+
+function findOverrideFor(overrides: ProjectMaterialOverride[], materialId: string): ProjectMaterialOverride | undefined {
+  return overrides.find((o) => o.materialId === materialId);
+}
+
+/** A representative "per purchased unit" price for display/CSV (BomLine.pricePerUnit) — an average when per-length stock variants make the real price non-uniform, exact otherwise. */
+function effectivePricePerUnit(cost: number, denominator: number, fallback: number): number {
+  return denominator > 0 ? cost / denominator : fallback;
 }
 
 function makeLumberBomLine(
@@ -164,17 +190,33 @@ function makeLumberBomLine(
   group: BomGroup,
   pieces: number[],
   suppliedByClient: boolean,
+  pricing: PricingContext,
 ): { line: BomLine; cutPlan: CutPlanResult } | null {
   const material = findMaterial(library, materialId);
   if (!material || pieces.length === 0) return null;
   const availableLengths = material.availableLengthsMm ?? [Math.max(...pieces)];
-  const cutPlan = computeCutPlan(materialId, pieces, availableLengths);
-  const pricePerMeter = material.pricePerMeter ?? 0;
+
+  const override = findOverrideFor(pricing.materialOverrides, materialId);
+  const priceModel = resolveEffectivePriceModel(material, override);
+  const costPerLengthMm = makeCostPerLengthFn(priceModel, pricing.vatPercent);
+  const cutPlan = computeCutPlan(materialId, pieces, availableLengths, { mode: pricing.cutOptimizationMode, costPerLengthMm });
+
+  const purchase = resolveLumberPurchaseCost({
+    priceModel,
+    byLength: cutPlan.purchasedBreakdown,
+    vatPercent: pricing.vatPercent,
+    widthMm: material.widthMm,
+  });
 
   const technicalLinearMeters = cutPlan.requiredLengthMm / 1000;
   const purchaseLinearMeters = cutPlan.totalPurchasedLengthMm / 1000;
-  const technicalCost = technicalLinearMeters * pricePerMeter;
-  const purchaseTotal = purchaseLinearMeters * pricePerMeter;
+  // Technical cost is informational only (what the design needs, not what's bought) — technical pieces
+  // aren't tied to a specific purchased stock length, so this always uses the base rate, never a per-length variant.
+  const baseExklPrice = normalizeExklMoms(priceModel.price, priceModel.vatMode, pricing.vatPercent);
+  const technicalCost = priceModel.priceUnit === "kr/m" || priceModel.priceUnit === "kr/lm" ? technicalLinearMeters * baseExklPrice : cutPlan.piecesCount * baseExklPrice;
+
+  const denominator =
+    purchase.priceUnit === "kr/m2" ? (purchase.purchaseAreaM2 ?? 0) : purchase.priceUnit === "kr/m" || purchase.priceUnit === "kr/lm" ? purchaseLinearMeters : cutPlan.totalPurchasedCount;
 
   const line: BomLine = {
     materialId,
@@ -183,15 +225,19 @@ function makeLumberBomLine(
     dimension: material.widthMm && material.thicknessMm ? `${material.widthMm}x${material.thicknessMm}` : "",
     technicalQuantity: cutPlan.piecesCount,
     technicalLinearMeters,
-    unit: "st",
-    pricePerUnit: pricePerMeter,
+    unit: purchase.priceUnit === "kr/m2" ? "m2" : "st",
+    pricePerUnit: effectivePricePerUnit(purchase.cost, denominator, baseExklPrice),
     technicalCost,
     wastePercent: cutPlan.wastePercent,
-    purchaseQuantity: cutPlan.totalPurchasedCount,
+    purchaseQuantity: purchase.priceUnit === "kr/m2" ? Math.round((purchase.purchaseAreaM2 ?? 0) * 100) / 100 : cutPlan.totalPurchasedCount,
     purchaseLinearMeters,
     purchaseBreakdown: cutPlan.purchasedBreakdown,
-    purchaseTotal,
+    purchaseTotal: purchase.cost,
     suppliedByClient,
+    priceUnit: purchase.priceUnit,
+    supplier: purchase.supplier,
+    priceMissing: !suppliedByClient && purchase.missing,
+    priceIsOverride: !!override,
   };
   return { line, cutPlan };
 }
@@ -202,13 +248,19 @@ function makeUnitBomLine(
   group: BomGroup,
   quantity: number,
   suppliedByClient: boolean,
+  pricing: PricingContext,
   reason?: string,
 ): BomLine | null {
   const material = findMaterial(library, materialId);
   if (!material || quantity <= 0) return null;
-  const isPackaged = material.unit === "förp";
-  const purchaseQuantity = isPackaged ? purchaseUnitCount(quantity, material.unitsPerPackage) : Math.ceil(quantity);
-  const pricePerUnit = material.pricePerUnit ?? 0;
+
+  const override = findOverrideFor(pricing.materialOverrides, materialId);
+  const priceModel = resolveEffectivePriceModel(material, override);
+  // Quantities/rounding are unchanged from before: only ceil to whole units unless the priceModel says
+  // "kr/förpackning" (packages), in which case resolveUnitPurchaseCost does the ceil-to-packages itself.
+  const roughPurchaseQuantity = Math.ceil(quantity);
+  const purchase = resolveUnitPurchaseCost(priceModel, quantity, roughPurchaseQuantity, pricing.vatPercent);
+
   return {
     materialId,
     group,
@@ -216,12 +268,16 @@ function makeUnitBomLine(
     dimension: material.widthMm && material.thicknessMm ? `${material.widthMm}x${material.thicknessMm}` : "",
     technicalQuantity: quantity,
     unit: material.unit ?? "st",
-    pricePerUnit,
-    technicalCost: quantity * pricePerUnit,
+    pricePerUnit: effectivePricePerUnit(purchase.cost, purchase.purchaseQuantity, priceModel.price),
+    technicalCost: quantity * effectivePricePerUnit(purchase.cost, purchase.purchaseQuantity, priceModel.price),
     wastePercent: material.wastePercent,
-    purchaseQuantity,
-    purchaseTotal: purchaseQuantity * pricePerUnit,
+    purchaseQuantity: purchase.purchaseQuantity,
+    purchaseTotal: purchase.cost,
     suppliedByClient,
+    priceUnit: purchase.priceUnit,
+    supplier: purchase.supplier,
+    priceMissing: !suppliedByClient && purchase.missing,
+    priceIsOverride: !!override,
   };
 }
 
@@ -235,6 +291,7 @@ export function computeLevelBom(
   level: DeckLevel,
   library: MaterialLibrary,
   clientSuppliedMaterialIds: string[],
+  pricing: PricingContext = defaultPricingContext(),
 ): LevelBomResult {
   const geometry = computeLevelGeometry(level, library);
   const bomLines: BomLine[] = [];
@@ -243,13 +300,7 @@ export function computeLevelBom(
 
   const trallGroups = groupTrallBoardsByMaterial(geometry.boards, level.trallMaterialId);
   for (const [materialId, boards] of trallGroups) {
-    const trall = makeLumberBomLine(
-      library,
-      materialId,
-      "TRALL",
-      boards.map((b) => b.lengthMm),
-      suppliedBy(materialId),
-    );
+    const trall = makeLumberBomLine(library, materialId, "TRALL", boards.map((b) => b.lengthMm), suppliedBy(materialId), pricing);
     if (trall) {
       bomLines.push(trall.line);
       cutPlans.push(trall.cutPlan);
@@ -262,6 +313,7 @@ export function computeLevelBom(
     "STOMME",
     geometry.joists.map((j) => j.lengthMm),
     suppliedBy(level.regelMaterialId),
+    pricing,
   );
   if (regel) {
     bomLines.push(regel.line);
@@ -274,6 +326,7 @@ export function computeLevelBom(
     "STOMME",
     geometry.beams.map((b) => b.lengthMm),
     suppliedBy(level.barlinaMaterialId),
+    pricing,
   );
   if (barlina) {
     bomLines.push(barlina.line);
@@ -287,6 +340,7 @@ export function computeLevelBom(
       "STOMME",
       geometry.posts.map((p) => p.heightMm),
       suppliedBy(level.postMaterialId),
+      pricing,
     );
     if (posts) {
       bomLines.push(posts.line);
@@ -297,13 +351,7 @@ export function computeLevelBom(
   // Plintar
   const plintType = library.plintTypes.find((p) => p.id === level.plintTypeId);
   if (plintType?.materialId) {
-    const plintLine = makeUnitBomLine(
-      library,
-      plintType.materialId,
-      "PLINTAR",
-      geometry.footings.length,
-      suppliedBy(plintType.materialId),
-    );
+    const plintLine = makeUnitBomLine(library, plintType.materialId, "PLINTAR", geometry.footings.length, suppliedBy(plintType.materialId), pricing);
     if (plintLine) bomLines.push(plintLine);
   }
 
@@ -328,6 +376,7 @@ export function computeLevelBom(
         "INFASTNING",
         counts.trallFasteners,
         suppliedBy(fastenerSystem.clipMaterialId),
+        pricing,
         "trall/regel",
       );
       if (clipLine) bomLines.push(clipLine);
@@ -338,6 +387,7 @@ export function computeLevelBom(
         "INFASTNING",
         counts.trallFasteners,
         suppliedBy(fastenerSystem.screwMaterialId),
+        pricing,
         "trall/regel",
       );
       if (screwLine) bomLines.push(screwLine);
@@ -349,6 +399,7 @@ export function computeLevelBom(
       "INFASTNING",
       counts.vinkelbeslagCount,
       suppliedBy("mat_beslag_vinkel"),
+      pricing,
       "regel/bärlina",
     );
     if (vinkelLine) bomLines.push(vinkelLine);
@@ -360,6 +411,7 @@ export function computeLevelBom(
         "INFASTNING",
         counts.konstruktionsskruvCount,
         suppliedBy("mat_skruv_konstruktion"),
+        pricing,
         "kortling",
       );
       if (konsLine) bomLines.push(konsLine);
@@ -371,6 +423,7 @@ export function computeLevelBom(
       "INFASTNING",
       counts.plintskruvCount,
       suppliedBy("mat_skruv_plint"),
+      pricing,
       "plint/stolpe",
     );
     if (plintSkruvLine) bomLines.push(plintSkruvLine);
@@ -389,7 +442,7 @@ export function computeLevelBom(
       return sum + Math.hypot(b.x - a.x, b.y - a.y);
     }, 0);
     if (lengthMm <= 0) continue;
-    const edgeLine = makeLumberBomLine(library, run.materialId, "OVRIGT", [lengthMm], suppliedBy(run.materialId));
+    const edgeLine = makeLumberBomLine(library, run.materialId, "OVRIGT", [lengthMm], suppliedBy(run.materialId), pricing);
     if (edgeLine) {
       bomLines.push(edgeLine.line);
       cutPlans.push(edgeLine.cutPlan);
@@ -404,6 +457,7 @@ export function computeLevelBom(
       "TRAPPA",
       Array(result.stringerCount).fill(result.stringerLengthMm),
       suppliedBy(stair.regelMaterialId),
+      pricing,
     );
     if (stringers) {
       bomLines.push(stringers.line);
@@ -415,6 +469,7 @@ export function computeLevelBom(
       "TRAPPA",
       Array(result.treadBoardCount).fill(stair.widthMm),
       suppliedBy(stair.trallMaterialId),
+      pricing,
     );
     if (treads) {
       bomLines.push(treads.line);
@@ -426,6 +481,7 @@ export function computeLevelBom(
       "TRAPPA",
       result.screwCount,
       suppliedBy("mat_skruv_konstruktion"),
+      pricing,
       "trappa",
     );
     if (stairScrews) bomLines.push(stairScrews);

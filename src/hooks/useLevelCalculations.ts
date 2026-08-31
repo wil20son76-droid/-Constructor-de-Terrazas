@@ -1,9 +1,9 @@
 import { useMemo } from "react";
-import type { DeckLevel, MaterialLibrary } from "../types";
+import type { CutOptimizationMode, DeckLevel, MaterialLibrary, ProjectMaterialOverride } from "../types";
 import { computeLevelBom, summarizeLevel } from "../materials";
 import { classifyEdges, filterEdgeBoardEligible } from "../deck/edgeClassification";
 import { computeLabourItems, totalLabourCost } from "../labour";
-import { computeCostSummary, computeMaterialCost } from "../pricing";
+import { computeCostSummary, computeMaterialCost, computeMaterialCostCompleteness } from "../pricing";
 import { validateLevel } from "../validation";
 import type { LabourRates } from "../types";
 import type { MarkupConfig, RotConfig } from "../pricing";
@@ -17,14 +17,32 @@ export interface UseLevelCalculationsArgs {
   vatPercent: number;
   rot: RotConfig;
   otherCostsTotal: number;
+  materialOverrides?: ProjectMaterialOverride[];
+  cutOptimizationMode?: CutOptimizationMode;
 }
 
 export function useLevelCalculations(args: UseLevelCalculationsArgs) {
-  const { level, library, clientSuppliedMaterialIds, labourRates, markup, vatPercent, rot, otherCostsTotal } = args;
+  const {
+    level,
+    library,
+    clientSuppliedMaterialIds,
+    labourRates,
+    markup,
+    vatPercent,
+    rot,
+    otherCostsTotal,
+    materialOverrides = [],
+    cutOptimizationMode = "minCost",
+  } = args;
 
   const bomResult = useMemo(
-    () => computeLevelBom(level, library, clientSuppliedMaterialIds),
-    [level, library, clientSuppliedMaterialIds],
+    () =>
+      computeLevelBom(level, library, clientSuppliedMaterialIds, {
+        vatPercent,
+        materialOverrides,
+        cutOptimizationMode,
+      }),
+    [level, library, clientSuppliedMaterialIds, vatPercent, materialOverrides, cutOptimizationMode],
   );
 
   const area = useMemo(() => summarizeLevel(level), [level]);
@@ -61,11 +79,12 @@ export function useLevelCalculations(args: UseLevelCalculationsArgs) {
   }, [area, bomResult.geometry.footings.length, level, labourRates]);
 
   const materialCost = useMemo(() => computeMaterialCost(bomResult.bomLines), [bomResult.bomLines]);
+  const materialCostCompleteness = useMemo(() => computeMaterialCostCompleteness(bomResult.bomLines), [bomResult.bomLines]);
   const labourCost = useMemo(() => totalLabourCost(labourItems), [labourItems]);
 
   const costs = useMemo(
-    () => computeCostSummary(materialCost, labourCost, otherCostsTotal, markup, vatPercent, rot),
-    [materialCost, labourCost, otherCostsTotal, markup, vatPercent, rot],
+    () => computeCostSummary(materialCost, labourCost, otherCostsTotal, markup, vatPercent, rot, materialCostCompleteness),
+    [materialCost, labourCost, otherCostsTotal, markup, vatPercent, rot, materialCostCompleteness],
   );
 
   return { ...bomResult, area, validation, labourItems, costs };
