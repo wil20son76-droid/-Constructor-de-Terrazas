@@ -1,5 +1,7 @@
 import type { ViewMode } from "../../store/projectStore";
 
+export type RenderMode = "2d" | "3d";
+
 interface TopBarProps {
   projectName: string;
   viewMode: ViewMode;
@@ -16,6 +18,11 @@ interface TopBarProps {
   onPrint: () => void;
   inspectMode: boolean;
   onToggleInspect: () => void;
+  renderMode: RenderMode;
+  onSetRenderMode: (mode: RenderMode) => void;
+  /** When true (3D "Kundvy" active), render a minimal bar for a clean client presentation. */
+  kundvy: boolean;
+  onExitKundvy: () => void;
 }
 
 const viewTabs: { id: ViewMode; label: string }[] = [
@@ -23,6 +30,11 @@ const viewTabs: { id: ViewMode; label: string }[] = [
   { id: "struktur", label: "Vista struktur" },
   { id: "material", label: "Vista material" },
   { id: "kostnad", label: "Vista kostnad" },
+];
+
+const renderModeTabs: { id: RenderMode; label: string }[] = [
+  { id: "2d", label: "2D" },
+  { id: "3d", label: "3D" },
 ];
 
 function TopBarButton({ label, onClick }: { label: string; onClick: () => void }) {
@@ -38,6 +50,15 @@ function TopBarButton({ label, onClick }: { label: string; onClick: () => void }
 }
 
 export function TopBar(props: TopBarProps) {
+  if (props.kundvy) {
+    return (
+      <div className="no-print flex h-12 shrink-0 items-center justify-between border-b border-slate-300 bg-slate-100 px-3">
+        <span className="text-sm font-semibold text-slate-800">{props.projectName}</span>
+        <TopBarButton label="Avsluta kundvy" onClick={props.onExitKundvy} />
+      </div>
+    );
+  }
+
   return (
     <div className="no-print flex h-12 shrink-0 items-center justify-between border-b border-slate-300 bg-slate-100 px-3">
       <div className="flex items-center gap-1">
@@ -64,19 +85,35 @@ export function TopBar(props: TopBarProps) {
         </button>
       </div>
 
-      <div className="flex items-center gap-1 rounded-lg bg-slate-200 p-1">
-        {viewTabs.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            onClick={() => props.onSetView(tab.id)}
-            className={`rounded px-3 py-1 text-sm ${
-              props.viewMode === tab.id ? "bg-white font-medium text-blue-700 shadow-sm" : "text-slate-600 hover:bg-slate-100"
-            }`}
-          >
-            {tab.label}
-          </button>
-        ))}
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 rounded-lg bg-slate-200 p-1">
+          {viewTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => props.onSetView(tab.id)}
+              className={`rounded px-3 py-1 text-sm ${
+                props.viewMode === tab.id ? "bg-white font-medium text-blue-700 shadow-sm" : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 rounded-lg bg-slate-200 p-1">
+          {renderModeTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => props.onSetRenderMode(tab.id)}
+              className={`rounded px-3 py-1 text-sm ${
+                props.renderMode === tab.id ? "bg-white font-medium text-blue-700 shadow-sm" : "text-slate-600 hover:bg-slate-100"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex items-center gap-1">

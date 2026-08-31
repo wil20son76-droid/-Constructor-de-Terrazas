@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { TopBar } from "./components/layout/TopBar";
+import { lazy, Suspense, useMemo, useState } from "react";
+import { TopBar, type RenderMode } from "./components/layout/TopBar";
 import { LeftPanel } from "./components/layout/LeftPanel";
 import { RightPanel } from "./components/panels/RightPanel";
 import { PlanView, type VertexEditTool } from "./components/plan/PlanView";
@@ -13,6 +13,10 @@ import { materialsToPriceCsv, parsePriceCsv } from "./export/priceCsv";
 import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
 import type { DeckSection, MaterialPriceModel, Stair } from "./types";
 
+// three.js/@react-three-fiber/drei are only needed once someone opens the
+// 3D view — lazy-loaded so the initial 2D-only page load doesn't pay for it.
+const Deck3DView = lazy(() => import("./components/three/Deck3DView").then((m) => ({ default: m.Deck3DView })));
+
 function App() {
   const store = useProjectStore();
   const { project, viewMode } = store;
@@ -23,6 +27,8 @@ function App() {
   const [freeFormMode, setFreeFormMode] = useState(false);
   const [editTool, setEditTool] = useState<VertexEditTool>("none");
   const [splitTargetSectionId, setSplitTargetSectionId] = useState<string | null>(null);
+  const [renderMode, setRenderMode] = useState<RenderMode>("2d");
+  const [kundvy, setKundvy] = useState(false);
 
   const handleConfirmSplit = (indexA: number, indexB: number) => {
     const trallMaterial = project.library.materials.find((m) => m.id === level.trallMaterialId);
@@ -121,6 +127,8 @@ function App() {
     }));
 
   const geometryErrors = calc.validation.filter((v) => v.severity === "error");
+  const mainMaterialName =
+    project.library.materials.find((m) => m.id === level.trallMaterialId)?.nameSv ?? "Trall";
 
   const inspectedDetail = useMemo(
     () =>
@@ -151,150 +159,176 @@ function App() {
           setInspectMode((v) => !v);
           setSelectedElement(null);
         }}
+        renderMode={renderMode}
+        onSetRenderMode={setRenderMode}
+        kundvy={kundvy}
+        onExitKundvy={() => setKundvy(false)}
       />
       <div className="flex min-h-0 flex-1">
-        <LeftPanel
-          gridSizeMm={project.settings.gridSizeMm}
-          snapEnabled={project.settings.snapEnabled}
-          onSetGrid={(mm) => store.update((p) => ({ ...p, settings: { ...p.settings, gridSizeMm: mm } }))}
-          onToggleSnap={() => store.update((p) => ({ ...p, settings: { ...p.settings, snapEnabled: !p.settings.snapEnabled } }))}
-          onSetPolygon={(polygon) => store.updateActiveLevel((l) => ({ ...l, polygon, openings: [] }))}
-          heightAboveGround={level.heightAboveGround}
-          onSetHeight={(mm) => store.updateActiveLevel((l) => ({ ...l, heightAboveGround: mm }))}
-          freeFormActive={freeFormMode}
-          onStartFreeForm={() => {
-            setEditTool("none");
-            setFreeFormMode(true);
-          }}
-          editTool={editTool}
-          onSetEditTool={(tool) => {
-            setFreeFormMode(false);
-            setEditTool(tool);
-            setSplitTargetSectionId(tool === "dela-sektion" ? (level.sections?.[0]?.id ?? null) : null);
-          }}
-          sections={level.sections}
-          splitTargetSectionId={splitTargetSectionId}
-          onSetSplitTargetSectionId={setSplitTargetSectionId}
-        />
-        <main className="relative min-w-0 flex-1">
-          {geometryErrors.length > 0 && (
-            <div className="no-print absolute inset-x-3 top-3 z-10 rounded bg-red-50 px-3 py-2 text-xs text-red-800 shadow">
-              <p className="font-semibold">Ogiltig geometri — materialberäkningar kan inte visas:</p>
-              <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                {geometryErrors.map((e) => (
-                  <li key={e.id}>{e.message}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <PlanView
-            level={level}
-            geometry={calc.geometry}
-            viewMode={viewMode}
+        {!kundvy && (
+          <LeftPanel
             gridSizeMm={project.settings.gridSizeMm}
             snapEnabled={project.settings.snapEnabled}
-            netAreaM2={calc.area.netAreaM2}
-            onEditEdge={(edgeIndex, newLength) =>
-              store.updateActiveLevel((l) => {
-                const points = isAxisAlignedRectangle(l.polygon.points)
-                  ? resizeRectangleEdge(l.polygon.points, edgeIndex, newLength)
-                  : editEdgeLength(l.polygon.points, edgeIndex, newLength);
-                return { ...l, polygon: { ...l.polygon, points } };
-              })
-            }
-            inspectMode={inspectMode}
-            selected={selectedElement}
-            onSelectElement={setSelectedElement}
-            drawingMode={freeFormMode}
-            onCancelDrawing={() => setFreeFormMode(false)}
-            onFinishDrawing={(drawnPoints) => {
-              const issues = validatePolygon(drawnPoints);
-              const errors = issues.filter((i) => i.severity === "error");
-              if (errors.length > 0) {
-                window.alert(`Formen kunde inte skapas:\n${errors.map((e) => `• ${e.message}`).join("\n")}`);
-                setFreeFormMode(false);
-                return;
-              }
-              store.updateActiveLevel((l) => ({
-                ...l,
-                polygon: { id: makeId("poly"), points: drawnPoints },
-                openings: [],
-              }));
-              setFreeFormMode(false);
+            onSetGrid={(mm) => store.update((p) => ({ ...p, settings: { ...p.settings, gridSizeMm: mm } }))}
+            onToggleSnap={() => store.update((p) => ({ ...p, settings: { ...p.settings, snapEnabled: !p.settings.snapEnabled } }))}
+            onSetPolygon={(polygon) => store.updateActiveLevel((l) => ({ ...l, polygon, openings: [] }))}
+            heightAboveGround={level.heightAboveGround}
+            onSetHeight={(mm) => store.updateActiveLevel((l) => ({ ...l, heightAboveGround: mm }))}
+            freeFormActive={freeFormMode}
+            onStartFreeForm={() => {
+              setEditTool("none");
+              setFreeFormMode(true);
             }}
             editTool={editTool}
-            onMoveVertex={(index, point) =>
-              store.updateActiveLevel((l) => {
-                const nextPoints = l.polygon.points.map((p, i) => (i === index ? point : p));
-                return { ...l, polygon: { ...l.polygon, points: nextPoints } };
-              })
-            }
-            onInsertPointOnEdge={(edgeIndex, t) =>
-              store.updateActiveLevel((l) => ({
-                ...l,
-                polygon: { ...l.polygon, points: insertPointOnEdge(l.polygon.points, edgeIndex, t) },
-              }))
-            }
-            onDeleteVertex={(index) =>
-              store.updateActiveLevel((l) => ({
-                ...l,
-                polygon: { ...l.polygon, points: l.polygon.points.filter((_, i) => i !== index) },
-              }))
-            }
+            onSetEditTool={(tool) => {
+              setFreeFormMode(false);
+              setEditTool(tool);
+              setSplitTargetSectionId(tool === "dela-sektion" ? (level.sections?.[0]?.id ?? null) : null);
+            }}
             sections={level.sections}
             splitTargetSectionId={splitTargetSectionId}
             onSetSplitTargetSectionId={setSplitTargetSectionId}
-            onConfirmSplit={handleConfirmSplit}
-            onAddStair={handleAddStair}
           />
-          {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
+        )}
+        <main className="relative min-w-0 flex-1">
+          {renderMode === "2d" ? (
+            <>
+              {geometryErrors.length > 0 && (
+                <div className="no-print absolute inset-x-3 top-3 z-10 rounded bg-red-50 px-3 py-2 text-xs text-red-800 shadow">
+                  <p className="font-semibold">Ogiltig geometri — materialberäkningar kan inte visas:</p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    {geometryErrors.map((e) => (
+                      <li key={e.id}>{e.message}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <PlanView
+                level={level}
+                geometry={calc.geometry}
+                viewMode={viewMode}
+                gridSizeMm={project.settings.gridSizeMm}
+                snapEnabled={project.settings.snapEnabled}
+                netAreaM2={calc.area.netAreaM2}
+                onEditEdge={(edgeIndex, newLength) =>
+                  store.updateActiveLevel((l) => {
+                    const points = isAxisAlignedRectangle(l.polygon.points)
+                      ? resizeRectangleEdge(l.polygon.points, edgeIndex, newLength)
+                      : editEdgeLength(l.polygon.points, edgeIndex, newLength);
+                    return { ...l, polygon: { ...l.polygon, points } };
+                  })
+                }
+                inspectMode={inspectMode}
+                selected={selectedElement}
+                onSelectElement={setSelectedElement}
+                drawingMode={freeFormMode}
+                onCancelDrawing={() => setFreeFormMode(false)}
+                onFinishDrawing={(drawnPoints) => {
+                  const issues = validatePolygon(drawnPoints);
+                  const errors = issues.filter((i) => i.severity === "error");
+                  if (errors.length > 0) {
+                    window.alert(`Formen kunde inte skapas:\n${errors.map((e) => `• ${e.message}`).join("\n")}`);
+                    setFreeFormMode(false);
+                    return;
+                  }
+                  store.updateActiveLevel((l) => ({
+                    ...l,
+                    polygon: { id: makeId("poly"), points: drawnPoints },
+                    openings: [],
+                  }));
+                  setFreeFormMode(false);
+                }}
+                editTool={editTool}
+                onMoveVertex={(index, point) =>
+                  store.updateActiveLevel((l) => {
+                    const nextPoints = l.polygon.points.map((p, i) => (i === index ? point : p));
+                    return { ...l, polygon: { ...l.polygon, points: nextPoints } };
+                  })
+                }
+                onInsertPointOnEdge={(edgeIndex, t) =>
+                  store.updateActiveLevel((l) => ({
+                    ...l,
+                    polygon: { ...l.polygon, points: insertPointOnEdge(l.polygon.points, edgeIndex, t) },
+                  }))
+                }
+                onDeleteVertex={(index) =>
+                  store.updateActiveLevel((l) => ({
+                    ...l,
+                    polygon: { ...l.polygon, points: l.polygon.points.filter((_, i) => i !== index) },
+                  }))
+                }
+                sections={level.sections}
+                splitTargetSectionId={splitTargetSectionId}
+                onSetSplitTargetSectionId={setSplitTargetSectionId}
+                onConfirmSplit={handleConfirmSplit}
+                onAddStair={handleAddStair}
+              />
+              {inspectMode && <InspectorPanel detail={inspectedDetail} onClose={() => setSelectedElement(null)} />}
+            </>
+          ) : (
+            <Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-slate-500">Laddar 3D-vy…</div>}>
+              <Deck3DView
+                level={level}
+                geometry={calc.geometry}
+                library={project.library}
+                validation={calc.validation}
+                projectName={project.name}
+                areaM2={calc.area.netAreaM2}
+                mainMaterialName={mainMaterialName}
+                kundvy={kundvy}
+                onToggleKundvy={() => setKundvy((v) => !v)}
+              />
+            </Suspense>
+          )}
         </main>
-        <RightPanel
-          viewMode={viewMode}
-          project={project}
-          level={level}
-          library={project.library}
-          area={calc.area}
-          validation={calc.validation}
-          jointCount={{
-            joists: calc.geometry.joists.length,
-            beams: calc.geometry.beams.length,
-            footings: calc.geometry.footings.length,
-            posts: calc.geometry.posts.length,
-          }}
-          regelCcInfo={calc.geometry.regelCcInfo}
-          barlinaSpacingInfo={calc.geometry.barlinaSpacingInfo}
-          bomLines={calc.bomLines}
-          cutPlans={calc.cutPlans}
-          costs={calc.costs}
-          labourItems={calc.labourItems}
-          onUpdateLevel={store.updateActiveLevel}
-          onUpdateProject={store.update}
-          onToggleClientSupplied={handleToggleClientSupplied}
-          priceLibrary={store.priceLibrary}
-          onUpsertLibraryMaterial={store.upsertLibraryMaterial}
-          onDuplicateLibraryMaterial={store.duplicateLibraryMaterial}
-          onRemoveLibraryMaterial={store.removeLibraryMaterial}
-          onSetLibraryMaterialActive={store.setLibraryMaterialActive}
-          onSetProjectMaterialOverride={(materialId, price, locked) =>
-            store.setProjectMaterialOverride(materialId, price as Pick<MaterialPriceModel, "price" | "priceUnit" | "vatMode" | "supplier">, locked)
-          }
-          onClearProjectMaterialOverride={store.clearProjectMaterialOverride}
-          onExportPricesCsv={() => downloadCsv(`${project.name}-prislista.csv`, materialsToPriceCsv(store.priceLibrary))}
-          onImportPricesCsv={async (file) => {
-            const text = await file.text();
-            const result = parsePriceCsv(text, store.priceLibrary);
-            for (const material of result.materials) {
-              const original = store.priceLibrary.find((m) => m.id === material.id);
-              if (original !== material) store.upsertLibraryMaterial(material);
+        {!kundvy && (
+          <RightPanel
+            viewMode={viewMode}
+            project={project}
+            level={level}
+            library={project.library}
+            area={calc.area}
+            validation={calc.validation}
+            jointCount={{
+              joists: calc.geometry.joists.length,
+              beams: calc.geometry.beams.length,
+              footings: calc.geometry.footings.length,
+              posts: calc.geometry.posts.length,
+            }}
+            regelCcInfo={calc.geometry.regelCcInfo}
+            barlinaSpacingInfo={calc.geometry.barlinaSpacingInfo}
+            bomLines={calc.bomLines}
+            cutPlans={calc.cutPlans}
+            costs={calc.costs}
+            labourItems={calc.labourItems}
+            onUpdateLevel={store.updateActiveLevel}
+            onUpdateProject={store.update}
+            onToggleClientSupplied={handleToggleClientSupplied}
+            priceLibrary={store.priceLibrary}
+            onUpsertLibraryMaterial={store.upsertLibraryMaterial}
+            onDuplicateLibraryMaterial={store.duplicateLibraryMaterial}
+            onRemoveLibraryMaterial={store.removeLibraryMaterial}
+            onSetLibraryMaterialActive={store.setLibraryMaterialActive}
+            onSetProjectMaterialOverride={(materialId, price, locked) =>
+              store.setProjectMaterialOverride(materialId, price as Pick<MaterialPriceModel, "price" | "priceUnit" | "vatMode" | "supplier">, locked)
             }
-            if (result.errors.length > 0) {
-              window.alert(`Prislista importerad (${result.updatedCount} uppdaterade).\n\nProblem:\n${result.errors.join("\n")}`);
-            } else {
-              window.alert(`Prislista importerad — ${result.updatedCount} material uppdaterade.`);
-            }
-          }}
-        />
+            onClearProjectMaterialOverride={store.clearProjectMaterialOverride}
+            onExportPricesCsv={() => downloadCsv(`${project.name}-prislista.csv`, materialsToPriceCsv(store.priceLibrary))}
+            onImportPricesCsv={async (file) => {
+              const text = await file.text();
+              const result = parsePriceCsv(text, store.priceLibrary);
+              for (const material of result.materials) {
+                const original = store.priceLibrary.find((m) => m.id === material.id);
+                if (original !== material) store.upsertLibraryMaterial(material);
+              }
+              if (result.errors.length > 0) {
+                window.alert(`Prislista importerad (${result.updatedCount} uppdaterade).\n\nProblem:\n${result.errors.join("\n")}`);
+              } else {
+                window.alert(`Prislista importerad — ${result.updatedCount} material uppdaterade.`);
+              }
+            }}
+          />
+        )}
       </div>
 
       {openDialogVisible && (
