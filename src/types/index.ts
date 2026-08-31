@@ -151,6 +151,83 @@ export interface Supplier {
   notes?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Manual material pricing
+//
+// The user enters and owns every price by hand; nothing here is a fixed/
+// hard-coded rate. `Material.priceModel` is the source of truth for cost
+// calculations going forward; the legacy flat fields above it
+// (`pricePerMeter`/`pricePerUnit`/`unitsPerPackage`) are kept only so old
+// saved projects keep deserialising and rendering unchanged — see
+// `pricing/materialPricing.ts` for the migration that synthesises a
+// `priceModel` from them the first time an old Material is loaded. A
+// material with no price entered yet still has quantities computed
+// normally; only its cost is flagged "Pris saknas" (see `priceMissing` on
+// `BomLine` and `CostSummary.materialCostIncomplete`).
+// ---------------------------------------------------------------------------
+
+/** How a price is denominated. The cost formula depends on this — see resolvePriceForPurchase. */
+export type PriceUnit = "kr/st" | "kr/m" | "kr/lm" | "kr/m2" | "kr/förpackning" | "kr/kg" | "kr/set";
+
+/** Whether an entered price already includes moms (VAT) or not. */
+export type VatMode = "inkl" | "exkl";
+
+export interface PriceHistoryEntry {
+  /** ISO date the price changed to `price`. */
+  date: string;
+  price: number;
+}
+
+/**
+ * A price for one specific commercial stock length of a lineal material
+ * (regel/bärlina/trall/stolpe/kantbräda/...). When present for a length,
+ * this is used verbatim instead of extrapolating from a per-metre rate —
+ * e.g. a 4.2 m regel board is very often NOT 4.2x the price of a 1 m
+ * length, because longer stock carries a different per-metre rate.
+ */
+export interface StockVariant {
+  id: string;
+  lengthMm: number;
+  price: number;
+  priceUnit: PriceUnit;
+  /** Defaults to the owning MaterialPriceModel's vatMode when omitted. */
+  vatMode?: VatMode;
+  supplier?: string;
+  sku?: string;
+}
+
+/** One supplier's price for a material, for comparing/choosing among several (see MaterialPriceModel.useCheapestSupplier). */
+export interface SupplierPrice {
+  id: string;
+  supplier: string;
+  price: number;
+  sku?: string;
+}
+
+export interface MaterialPriceModel {
+  /** Base/default price — used directly for non-lineal materials, and as the lineal fallback when no StockVariant matches a purchased length. */
+  price: number;
+  priceUnit: PriceUnit;
+  /** Whether `price` (and any StockVariant without its own vatMode) already includes moms. */
+  vatMode: VatMode;
+  /** Units (matching priceUnit's denomination — st, or m² for "kr/m2") per package, for "kr/förpackning" materials. */
+  packageSize?: number;
+  supplier?: string;
+  sku?: string;
+  /** Soft-disable: excluded from MaterialSelect pickers for new use, but existing references keep working. */
+  active: boolean;
+  lastUpdated?: string;
+  priceHistory?: PriceHistoryEntry[];
+  /** Per-commercial-length prices for lineal materials — see StockVariant doc. */
+  stockVariants?: StockVariant[];
+  /** Optional per-supplier price comparison. */
+  supplierPrices?: SupplierPrice[];
+  activeSupplierId?: string;
+  /** When true (and supplierPrices is non-empty), the cheapest entry in supplierPrices is used regardless of activeSupplierId. */
+  useCheapestSupplier?: boolean;
+  notes?: string;
+}
+
 /** Generic priced, purchasable material/product. */
 export interface Material {
   id: string;
@@ -163,10 +240,12 @@ export interface Material {
   thicknessMm?: number;
   /** Commercially available lengths, mm (e.g. [3000, 4200, 4800, 5400]). */
   availableLengthsMm?: number[];
-  pricePerMeter?: number; // SEK
-  pricePerUnit?: number; // SEK, e.g. per board/post/footing/screw package
+  /** @deprecated legacy flat price, SEK/m — kept for old saved projects; use `priceModel` for new code. */
+  pricePerMeter?: number;
+  /** @deprecated legacy flat price, SEK/unit — kept for old saved projects; use `priceModel` for new code. */
+  pricePerUnit?: number;
   unit?: "st" | "m" | "m2" | "förp"; // styck/meter/kvadratmeter/förpackning
-  /** For "förp" units (e.g. a box of 200 screws): pieces per package. */
+  /** @deprecated For "förp" units: pieces per package — kept for old saved projects; use `priceModel.packageSize`. */
   unitsPerPackage?: number;
   supplierId?: string;
   sku?: string;
@@ -174,7 +253,27 @@ export interface Material {
   /** For trall: recommended max joist CC spacing, mm. */
   recommendedRegelSpacingMm?: number;
   notes?: string;
+  /** The manually-entered, user-owned price model. Optional only so a Material literal written before this field existed still type-checks; `pricing/materialPricing.ts` fills it in via migration before use. */
+  priceModel?: MaterialPriceModel;
 }
+
+/**
+ * A project-specific price pin for one material — either a frozen
+ * ("Lås pris i projekt") snapshot that ignores later library changes, or
+ * (when `locked` is false) a per-project-only price tweak that does NOT
+ * write back to the shared material price library.
+ */
+export interface ProjectMaterialOverride {
+  materialId: string;
+  price: number;
+  priceUnit: PriceUnit;
+  vatMode: VatMode;
+  supplier?: string;
+  locked: boolean;
+}
+
+/** How the cut-length optimiser should choose between physically-valid stock combinations. */
+export type CutOptimizationMode = "minWaste" | "minCost" | "balanced";
 
 // ---------------------------------------------------------------------------
 // Structural members (computed output, not input)
@@ -309,6 +408,14 @@ export interface BomLine {
   /** Cost at the purchase quantity — this is what is billed and feeds the cost summary. */
   purchaseTotal: number;
   suppliedByClient?: boolean;
+  /** The PriceUnit actually used to compute this line's cost. */
+  priceUnit?: PriceUnit;
+  /** Resolved supplier name (override > material.priceModel.supplier > legacy supplierId lookup). */
+  supplier?: string;
+  /** True when the effective price used was 0 because no price has been entered yet — quantities are still real, only the cost is untrustworthy. See CostSummary.materialCostIncomplete. */
+  priceMissing?: boolean;
+  /** True when this line's price came from a project-local override (locked or not). */
+  priceIsOverride?: boolean;
 }
 
 /** One physical stock board purchased, and which piece-segments it was cut into. */
@@ -415,6 +522,10 @@ export interface CostSummary {
   rotEligibleAmount: number;
   rotDeductionAmount: number;
   priceAfterRot: number;
+  /** True when at least one BOM line's cost is 0 because "Pris saknas" — the total below is understated, not necessarily correct. */
+  materialCostIncomplete: boolean;
+  /** How many distinct BOM lines are missing a price. */
+  missingPriceCount: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +575,10 @@ export interface ProjectSettings {
   rotPercent: number;
   rotMaxDeduction: number;
   rotEligibility: RotEligibility;
+  /** How the cut optimiser picks between physically-valid stock combinations. Optional/undefined on old saved projects — treat as "minCost" (the spec's default). */
+  cutOptimizationMode?: CutOptimizationMode;
+  /** Default VatMode assumed for a newly-entered price ("Inmatade priser är..."); each material can still override it. */
+  defaultPriceVatMode?: VatMode;
 }
 
 export interface MaterialLibrary {
@@ -501,6 +616,14 @@ export interface Project {
   };
   clientSuppliedMaterialIds: string[]; // materials marked "kund tillhandahåller"
   quotationInfo: QuotationInfo;
+  /**
+   * Bumped whenever the saved-project shape changes in a way that needs a
+   * migration step on load (see `pricing/materialPricing.ts`). Absent on
+   * every project saved before this field existed — treat that as version 1.
+   */
+  schemaVersion?: number;
+  /** Per-project price pins ("Lås pris i projekt") or local-only tweaks — see ProjectMaterialOverride. */
+  materialOverrides?: ProjectMaterialOverride[];
 }
 
 // ---------------------------------------------------------------------------

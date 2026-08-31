@@ -41,6 +41,11 @@ export function computeClientSuppliedValue(bomLines: BomLine[]): number {
   return bomLines.filter((l) => l.suppliedByClient).reduce((sum, l) => sum + l.purchaseTotal, 0);
 }
 
+export interface MaterialCostCompleteness {
+  incomplete: boolean;
+  missingCount: number;
+}
+
 export function computeCostSummary(
   materialCost: number,
   labourCost: number,
@@ -48,6 +53,7 @@ export function computeCostSummary(
   markup: MarkupConfig,
   vatPercent: number,
   rot: RotConfig,
+  materialCostCompleteness: MaterialCostCompleteness = { incomplete: false, missingCount: 0 },
 ): CostSummary {
   const machineCost = markup.machineCost;
   const transportCost = markup.transportCost;
@@ -93,5 +99,7 @@ export function computeCostSummary(
     rotEligibleAmount,
     rotDeductionAmount,
     priceAfterRot,
+    materialCostIncomplete: materialCostCompleteness.incomplete,
+    missingPriceCount: materialCostCompleteness.missingCount,
   };
 }
