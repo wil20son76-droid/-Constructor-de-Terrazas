@@ -77,6 +77,20 @@ export function Deck3DView(props: Deck3DViewProps) {
     return () => document.removeEventListener("fullscreenchange", handleChange);
   }, []);
 
+  // Real browsers already exit fullscreen on Escape natively (the Fullscreen
+  // API spec mandates it, before this ever reaches page JS) — this listener
+  // is a defensive fallback for the rare case that native handling doesn't
+  // fire (e.g. some embedded/automated browser contexts).
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && document.fullscreenElement === containerRef.current) {
+        document.exitFullscreen();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   const requestView = (view: QuickView) => {
     viewCommandCounter.current += 1;
     setViewCommand({ view, nonce: viewCommandCounter.current });
