@@ -88,6 +88,16 @@ export function downloadJson(filename: string, json: string): void {
   downloadTextFile(filename, json, "application/json;charset=utf-8");
 }
 
+/** Downloads a data: URL (e.g. a canvas.toDataURL('image/png') screenshot) as a file. */
+export function downloadDataUrl(filename: string, dataUrl: string): void {
+  const anchor = document.createElement("a");
+  anchor.href = dataUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+}
+
 /** Opens the browser print dialog — used for PDF export of the material
  * list, shopping list, quotation and plan print views (print CSS hides
  * everything but the `.print-area` content). */
