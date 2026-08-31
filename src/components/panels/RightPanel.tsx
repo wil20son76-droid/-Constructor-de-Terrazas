@@ -1,6 +1,6 @@
 import type { AreaSummary } from "../../geometry";
 import type { UniformSpacingResult } from "../../structural";
-import type { BomLine, CostSummary, CutPlanResult, DeckLevel, LabourItem, MaterialLibrary, Project, ValidationIssue } from "../../types";
+import type { BomLine, CostSummary, CutPlanResult, DeckLevel, LabourItem, Material, MaterialLibrary, Project, ValidationIssue } from "../../types";
 import type { ViewMode } from "../../store/projectStore";
 import { DeckPropertiesPanel } from "./DeckPropertiesPanel";
 import { StructurePanel } from "./StructurePanel";
@@ -24,6 +24,14 @@ interface Props {
   onUpdateLevel: (fn: (level: DeckLevel) => DeckLevel) => void;
   onUpdateProject: (fn: (project: Project) => Project) => void;
   onToggleClientSupplied: (materialId: string) => void;
+  priceLibrary: Material[];
+  onUpsertLibraryMaterial: (material: Material) => void;
+  onDuplicateLibraryMaterial: (id: string) => void;
+  onRemoveLibraryMaterial: (id: string) => void;
+  onSetLibraryMaterialActive: (id: string, active: boolean) => void;
+  onSetProjectMaterialOverride: (materialId: string, price: { price: number; priceUnit: string; vatMode: string; supplier?: string }, locked: boolean) => void;
+  onExportPricesCsv: () => void;
+  onImportPricesCsv: (file: File) => void;
 }
 
 export function RightPanel(props: Props) {
@@ -50,6 +58,14 @@ export function RightPanel(props: Props) {
           clientSuppliedMaterialIds={props.project.clientSuppliedMaterialIds}
           onToggleClientSupplied={props.onToggleClientSupplied}
           validation={props.validation}
+          priceLibrary={props.priceLibrary}
+          onUpsertLibraryMaterial={props.onUpsertLibraryMaterial}
+          onDuplicateLibraryMaterial={props.onDuplicateLibraryMaterial}
+          onRemoveLibraryMaterial={props.onRemoveLibraryMaterial}
+          onSetLibraryMaterialActive={props.onSetLibraryMaterialActive}
+          onSetProjectMaterialOverride={props.onSetProjectMaterialOverride}
+          onExportPricesCsv={props.onExportPricesCsv}
+          onImportPricesCsv={props.onImportPricesCsv}
         />
       )}
       {props.viewMode === "kostnad" && (

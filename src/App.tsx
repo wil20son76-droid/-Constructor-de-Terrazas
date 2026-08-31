@@ -9,8 +9,9 @@ import { activeLevel, useProjectStore } from "./store/projectStore";
 import { useLevelCalculations } from "./hooks/useLevelCalculations";
 import { editEdgeLength, insertPointOnEdge, isAxisAlignedRectangle, makeId, resizeRectangleEdge, splitPolygon, validatePolygon } from "./geometry";
 import { bomToCsv, downloadCsv, downloadJson, printCurrentView, projectToJson } from "./export";
+import { materialsToPriceCsv, parsePriceCsv } from "./export/priceCsv";
 import { resolveInspectedElement, type SelectedElement } from "./deck/inspector";
-import type { DeckSection, Stair } from "./types";
+import type { DeckSection, MaterialPriceModel, Stair } from "./types";
 
 function App() {
   const store = useProjectStore();
@@ -270,6 +271,28 @@ function App() {
           onUpdateLevel={store.updateActiveLevel}
           onUpdateProject={store.update}
           onToggleClientSupplied={handleToggleClientSupplied}
+          priceLibrary={store.priceLibrary}
+          onUpsertLibraryMaterial={store.upsertLibraryMaterial}
+          onDuplicateLibraryMaterial={store.duplicateLibraryMaterial}
+          onRemoveLibraryMaterial={store.removeLibraryMaterial}
+          onSetLibraryMaterialActive={store.setLibraryMaterialActive}
+          onSetProjectMaterialOverride={(materialId, price, locked) =>
+            store.setProjectMaterialOverride(materialId, price as Pick<MaterialPriceModel, "price" | "priceUnit" | "vatMode" | "supplier">, locked)
+          }
+          onExportPricesCsv={() => downloadCsv(`${project.name}-prislista.csv`, materialsToPriceCsv(store.priceLibrary))}
+          onImportPricesCsv={async (file) => {
+            const text = await file.text();
+            const result = parsePriceCsv(text, store.priceLibrary);
+            for (const material of result.materials) {
+              const original = store.priceLibrary.find((m) => m.id === material.id);
+              if (original !== material) store.upsertLibraryMaterial(material);
+            }
+            if (result.errors.length > 0) {
+              window.alert(`Prislista importerad (${result.updatedCount} uppdaterade).\n\nProblem:\n${result.errors.join("\n")}`);
+            } else {
+              window.alert(`Prislista importerad — ${result.updatedCount} material uppdaterade.`);
+            }
+          }}
         />
       </div>
 
