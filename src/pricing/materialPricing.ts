@@ -107,23 +107,31 @@ export interface PurchaseCostResult {
   missing: boolean;
   priceUnit: import("../types").PriceUnit;
   supplier?: string;
+  /** Populated when the effective priceUnit is "kr/m2" (purchased AREA, m², after any package rounding). */
+  purchaseAreaM2?: number;
+}
+
+export interface LumberCostInput {
+  priceModel: MaterialPriceModel;
+  /** From CutPlanResult.purchasedBreakdown — required quantities/counts are NEVER altered here, only how their cost is priced. */
+  byLength: PurchasedBoardGroup[];
+  vatPercent: number;
+  /** Board face width, mm — required only when priceUnit is "kr/m2" (area = length x width per board). */
+  widthMm?: number;
 }
 
 /**
- * Resolves the excl.-moms cost of ONE purchase, using the priceModel's
- * formula for its PriceUnit — see the module doc: never a single
- * hard-coded "price/m x length" assumption. `vatPercent` is only used to
- * normalise an "inkl. moms" price.
+ * Resolves the excl.-moms cost of a lumber/board purchase, using the
+ * priceModel's formula for its PriceUnit — see the module doc: never a
+ * single hard-coded "price/m x length" assumption. `vatPercent` is only
+ * used to normalise an "inkl. moms" price.
  *
- * `byLength` (from CutPlanResult.purchasedBreakdown) is used for lineal
- * materials to look up a StockVariant per purchased length — required
- * quantities/counts are NEVER altered here, only how their cost is priced.
+ * `byLength` is used to look up a StockVariant per purchased length when
+ * present; a length with no matching variant is flagged `missing` rather
+ * than falling back to the base rate (that would silently misprice a
+ * material the user has explicitly given per-length prices for).
  */
-export function resolveLumberPurchaseCost(
-  priceModel: MaterialPriceModel,
-  byLength: PurchasedBoardGroup[],
-  vatPercent: number,
-): PurchaseCostResult {
+export function resolveLumberPurchaseCost({ priceModel, byLength, vatPercent, widthMm }: LumberCostInput): PurchaseCostResult {
   const supplier = priceModel.supplier;
   if (priceModel.stockVariants && priceModel.stockVariants.length > 0) {
     let cost = 0;
@@ -147,6 +155,16 @@ export function resolveLumberPurchaseCost(
   const exklPrice = normalizeExklMoms(priceModel.price, priceModel.vatMode, vatPercent);
   const totalPieces = byLength.reduce((s, g) => s + g.count, 0);
   const totalLengthMm = byLength.reduce((s, g) => s + g.lengthMm * g.count, 0);
+
+  if (priceModel.priceUnit === "kr/m2" && widthMm) {
+    const rawAreaM2 = (totalLengthMm * widthMm) / 1_000_000;
+    if (priceModel.packageSize && priceModel.packageSize > 0) {
+      const boxes = Math.ceil(rawAreaM2 / priceModel.packageSize);
+      const purchaseAreaM2 = boxes * priceModel.packageSize;
+      return { cost: exklPrice * purchaseAreaM2, missing: exklPrice === 0, priceUnit: "kr/m2", supplier, purchaseAreaM2 };
+    }
+    return { cost: exklPrice * rawAreaM2, missing: exklPrice === 0, priceUnit: "kr/m2", supplier, purchaseAreaM2: rawAreaM2 };
+  }
   if (priceModel.priceUnit === "kr/m" || priceModel.priceUnit === "kr/lm") {
     return { cost: exklPrice * (totalLengthMm / 1000), missing: exklPrice === 0, priceUnit: priceModel.priceUnit, supplier };
   }
