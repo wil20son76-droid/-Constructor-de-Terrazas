@@ -37,8 +37,19 @@ export function computeMaterialCost(bomLines: BomLine[]): number {
   return bomLines.filter((l) => !l.suppliedByClient).reduce((sum, l) => sum + l.purchaseTotal, 0);
 }
 
+/** How many BOM lines (excluding client-supplied ones, which are deliberately 0-cost) are missing a price — see BomLine.priceMissing. */
+export function computeMaterialCostCompleteness(bomLines: BomLine[]): MaterialCostCompleteness {
+  const missing = bomLines.filter((l) => !l.suppliedByClient && l.priceMissing);
+  return { incomplete: missing.length > 0, missingCount: missing.length };
+}
+
 export function computeClientSuppliedValue(bomLines: BomLine[]): number {
   return bomLines.filter((l) => l.suppliedByClient).reduce((sum, l) => sum + l.purchaseTotal, 0);
+}
+
+export interface MaterialCostCompleteness {
+  incomplete: boolean;
+  missingCount: number;
 }
 
 export function computeCostSummary(
@@ -48,6 +59,7 @@ export function computeCostSummary(
   markup: MarkupConfig,
   vatPercent: number,
   rot: RotConfig,
+  materialCostCompleteness: MaterialCostCompleteness = { incomplete: false, missingCount: 0 },
 ): CostSummary {
   const machineCost = markup.machineCost;
   const transportCost = markup.transportCost;
@@ -93,5 +105,7 @@ export function computeCostSummary(
     rotEligibleAmount,
     rotDeductionAmount,
     priceAfterRot,
+    materialCostIncomplete: materialCostCompleteness.incomplete,
+    missingPriceCount: materialCostCompleteness.missingCount,
   };
 }

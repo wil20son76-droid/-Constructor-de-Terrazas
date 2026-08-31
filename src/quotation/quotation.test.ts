@@ -23,6 +23,8 @@ function makeCostSummary(overrides: Partial<CostSummary> = {}): CostSummary {
     rotEligibleAmount: 0,
     rotDeductionAmount: 0,
     priceAfterRot: 2475,
+    materialCostIncomplete: false,
+    missingPriceCount: 0,
     ...overrides,
   };
 }

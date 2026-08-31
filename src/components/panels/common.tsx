@@ -32,7 +32,11 @@ export function MaterialSelect({
   value: string;
   onChange: (id: string) => void;
 }) {
-  const options = materials.filter((m) => m.category === category);
+  // A deactivated material ("Inaktivera" in Materialbibliotek) is hidden
+  // from the picker for NEW selections, but the currently-selected value
+  // must keep showing even if it was deactivated after the fact — an
+  // existing reference must not silently disappear from the dropdown.
+  const options = materials.filter((m) => m.category === category && (m.priceModel?.active !== false || m.id === value));
   return (
     <select className={inputClass} value={value} onChange={(e) => onChange(e.target.value)}>
       {options.map((m) => (

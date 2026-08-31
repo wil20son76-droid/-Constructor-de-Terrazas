@@ -31,7 +31,7 @@
  * (which can silently under-price pieces longer than that one length —
  * see CALCULATION_AUDIT.md).
  */
-import type { CutBin, CutBinItem, CutPlanResult, PurchasedBoardGroup } from "../types";
+import type { CutBin, CutBinItem, CutOptimizationMode, CutPlanResult, PurchasedBoardGroup } from "../types";
 
 export const REUSABLE_OFFCUT_MIN_MM = 300;
 
@@ -76,17 +76,99 @@ export function splitRunsToMaxLength(lengthsMm: number[], maxLengthMm: number): 
   return buildPieceSegments(lengthsMm, maxLengthMm).map((s) => s.lengthMm);
 }
 
-/** Simulates first-fit packing of `segments` (in order) into `startingRemaining` mm; returns leftover space. */
-function simulateGreedyFill(startingRemainingMm: number, segments: PieceSegment[]): number {
+/** Simulates first-fit packing of `segments` (in order) into `startingRemaining` mm; returns leftover space and how many segments it actually absorbed. */
+function simulateGreedyFill(startingRemainingMm: number, segments: PieceSegment[]): { leftoverMm: number; absorbed: number } {
   let remaining = startingRemainingMm;
+  let absorbed = 0;
   for (const seg of segments) {
-    if (seg.lengthMm <= remaining + 1e-9) remaining -= seg.lengthMm;
+    if (seg.lengthMm <= remaining + 1e-9) {
+      remaining -= seg.lengthMm;
+      absorbed++;
+    }
   }
-  return Math.max(0, remaining);
+  return { leftoverMm: Math.max(0, remaining), absorbed };
 }
 
-export function packSegments(segments: PieceSegment[], availableLengthsMm: number[]): CutBin[] {
+export interface PackOptions {
+  /** "minWaste" (default) reproduces the original waste-only heuristic exactly, including its shortest-length tie-break. */
+  mode?: CutOptimizationMode;
+  /** Excl.-moms price of ONE board of the given stock length — required for "minCost"/"balanced" to have any effect; without it every mode behaves as "minWaste". */
+  costPerLengthMm?: (lengthMm: number) => number;
+}
+
+interface NewBinCandidate {
+  length: number;
+  waste: number;
+  cost: number;
+  /** How many of the lookahead pieces this board's leftover space would also absorb (see simulateGreedyFill). */
+  absorbed: number;
+}
+
+/**
+ * Picks which stock length to buy for a new bin among `candidates` (all of
+ * which physically fit the current piece), per `mode`:
+ *  - minWaste: minimise waste after the lookahead simulation, tie-broken by
+ *    the shortest length (the original, cost-unaware heuristic — used
+ *    whenever no cost function is supplied, so existing callers/tests see
+ *    byte-identical output).
+ *  - minCost / balanced: score by `cost / (1 + absorbed)` — the price of
+ *    this ONE board spread over every piece it actually serves (itself
+ *    plus however many lookahead pieces fit in its leftover space) — NOT
+ *    the board's raw price. A raw-price comparison would greedily buy the
+ *    cheapest single board for the current piece while ignoring that a
+ *    pricier, longer board might avoid a second board entirely — e.g. two
+ *    2.1 m pieces at a flat kr/m rate: a 3.6 m board (cheaper per board,
+ *    holds only one) still costs MORE in total than one 4.2 m board that
+ *    holds both, since 2x3.6m > 1x4.2m at the same rate. Dividing by
+ *    pieces-served fixes this: the 4.2 m board's effective per-piece cost
+ *    is half its price, correctly beating the 3.6 m board's un-shared
+ *    price.
+ *    minCost: pure minimum per-piece cost, tied-broken by waste. balanced:
+ *    per-piece cost and waste each normalised against the other
+ *    candidates in this decision, summed, minimised.
+ */
+function pickCandidate(candidates: NewBinCandidate[], mode: CutOptimizationMode, hasCost: boolean): number | null {
+  if (candidates.length === 0) return null;
+  if (!hasCost || mode === "minWaste") {
+    let best = candidates[0];
+    for (const c of candidates.slice(1)) if (c.waste < best.waste - 1e-9) best = c;
+    return best.length;
+  }
+  const costPerPiece = (c: NewBinCandidate) => c.cost / (1 + c.absorbed);
+  if (mode === "minCost") {
+    let best = candidates[0];
+    let bestCpp = costPerPiece(best);
+    for (const c of candidates.slice(1)) {
+      const cpp = costPerPiece(c);
+      if (cpp < bestCpp - 1e-9) {
+        best = c;
+        bestCpp = cpp;
+      } else if (Math.abs(cpp - bestCpp) <= 1e-9 && c.waste < best.waste - 1e-9) {
+        best = c;
+        bestCpp = cpp;
+      }
+    }
+    return best.length;
+  }
+  // balanced
+  const cpps = candidates.map(costPerPiece);
+  const maxWaste = Math.max(...candidates.map((c) => c.waste), 1e-9);
+  const maxCpp = Math.max(...cpps, 1e-9);
+  let bestIdx = 0;
+  let bestScore = candidates[0].waste / maxWaste + cpps[0] / maxCpp;
+  for (let i = 1; i < candidates.length; i++) {
+    const score = candidates[i].waste / maxWaste + cpps[i] / maxCpp;
+    if (score < bestScore - 1e-9) {
+      bestIdx = i;
+      bestScore = score;
+    }
+  }
+  return candidates[bestIdx].length;
+}
+
+export function packSegments(segments: PieceSegment[], availableLengthsMm: number[], options: PackOptions = {}): CutBin[] {
   if (availableLengthsMm.length === 0) return [];
+  const { mode = "minWaste", costPerLengthMm } = options;
   const sortedLengths = [...availableLengthsMm].sort((a, b) => a - b);
   const sorted = [...segments].sort((a, b) => b.lengthMm - a.lengthMm);
   const bins: CutBin[] = [];
@@ -112,20 +194,19 @@ export function packSegments(segments: PieceSegment[], availableLengthsMm: numbe
       return;
     }
 
-    // 2. Open a new bin. Pick the stock length that, after greedily fitting
-    // as many of the next not-yet-placed pieces as possible, leaves the
-    // least waste — not just the shortest length that fits THIS piece.
+    // 2. Open a new bin. Simulate greedily fitting as many of the next
+    // not-yet-placed pieces as possible into each candidate length's
+    // leftover space — not just the shortest length that fits THIS piece —
+    // then let pickCandidate choose among the candidates per `mode`.
     const lookahead = sorted.slice(i + 1, i + 1 + LOOKAHEAD_WINDOW);
-    let chosenLength: number | null = null;
-    let bestWaste = Infinity;
+    const candidates: NewBinCandidate[] = [];
     for (const length of sortedLengths) {
       if (length + 1e-9 < seg.lengthMm) continue; // doesn't even fit this piece
-      const waste = simulateGreedyFill(length - seg.lengthMm, lookahead);
-      if (waste < bestWaste - 1e-9) {
-        bestWaste = waste;
-        chosenLength = length;
-      }
+      const { leftoverMm: waste, absorbed } = simulateGreedyFill(length - seg.lengthMm, lookahead);
+      const cost = costPerLengthMm ? costPerLengthMm(length) : 0;
+      candidates.push({ length, waste, cost, absorbed });
     }
+    const chosenLength = pickCandidate(candidates, mode, !!costPerLengthMm);
     // No available stock is long enough for this single piece: it must be
     // reported as its own oversized "bin" so callers can flag it — this
     // should not normally happen once `buildPieceSegments` has split runs
@@ -144,7 +225,12 @@ export function packSegments(segments: PieceSegment[], availableLengthsMm: numbe
   return bins;
 }
 
-export function computeCutPlan(materialId: string, pieces: number[], availableLengthsMm: number[]): CutPlanResult {
+export function computeCutPlan(
+  materialId: string,
+  pieces: number[],
+  availableLengthsMm: number[],
+  options: PackOptions = {},
+): CutPlanResult {
   const requiredLengthMm = pieces.reduce((s, p) => s + Math.max(0, p), 0);
   const piecesCount = pieces.filter((p) => p > 0).length;
 
@@ -168,7 +254,7 @@ export function computeCutPlan(materialId: string, pieces: number[], availableLe
 
   const maxAvailable = Math.max(...availableLengthsMm);
   const segments = buildPieceSegments(pieces, maxAvailable);
-  const bins = packSegments(segments, availableLengthsMm);
+  const bins = packSegments(segments, availableLengthsMm, options);
 
   const totalPurchasedLengthMm = bins.reduce((s, b) => s + b.stockLengthMm, 0);
   const wasteMm = bins.reduce((s, b) => s + b.offcutMm, 0);
