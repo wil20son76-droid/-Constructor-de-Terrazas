@@ -1,6 +1,12 @@
-import type { CostItem, CostSummary, LabourItem, LabourRates, Project, QuotationInfo } from "../../types";
+import type { CostItem, CostSummary, CutOptimizationMode, LabourItem, LabourRates, Project, QuotationInfo, VatMode } from "../../types";
 import { formatSek } from "../../utils/format";
 import { Field, inputClass, QuickButtons, Section } from "./common";
+
+const optimizationModes: { value: CutOptimizationMode; label: string }[] = [
+  { value: "minWaste", label: "Minsta spill" },
+  { value: "minCost", label: "Lägsta kostnad" },
+  { value: "balanced", label: "Balanserad" },
+];
 
 interface Props {
   project: Project;
@@ -181,6 +187,52 @@ export function CostsPanel({ project, costs, labourItems, onUpdateProject }: Pro
           </>
         )}
       </Section>
+
+      <Section title="Materialprissättning">
+        <Field label="Optimera kapning för">
+          <div className="flex gap-1">
+            {optimizationModes.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => onUpdateProject((p) => ({ ...p, settings: { ...p.settings, cutOptimizationMode: m.value } }))}
+                className={`flex-1 rounded border px-1.5 py-1 text-xs ${
+                  (project.settings.cutOptimizationMode ?? "minCost") === m.value
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-slate-300 text-slate-600"
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+        </Field>
+        <Field label="Inmatade priser är">
+          <div className="flex gap-1">
+            {([{ value: "exkl", label: "exkl. moms" }, { value: "inkl", label: "inkl. moms" }] as { value: VatMode; label: string }[]).map((v) => (
+              <button
+                key={v.value}
+                type="button"
+                onClick={() => onUpdateProject((p) => ({ ...p, settings: { ...p.settings, defaultPriceVatMode: v.value } }))}
+                className={`flex-1 rounded border px-1.5 py-1 text-xs ${
+                  (project.settings.defaultPriceVatMode ?? "exkl") === v.value
+                    ? "border-blue-500 bg-blue-50 text-blue-700"
+                    : "border-slate-300 text-slate-600"
+                }`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-xs text-slate-400">Standard för nya material i Materialbibliotek — varje material kan ändå ha sin egen momsinställning.</p>
+        </Field>
+      </Section>
+
+      {costs.materialCostIncomplete && (
+        <div className="m-3 rounded bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+          Materialkostnad ofullständig — {costs.missingPriceCount} pris{costs.missingPriceCount === 1 ? "" : "er"} saknas i Materialbibliotek eller BOM. Summorna nedan är beräknade ändå, men underskattar den verkliga kostnaden.
+        </div>
+      )}
 
       <Section title="Kostnadssammanställning">
         <table className="w-full text-sm">

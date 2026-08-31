@@ -16,6 +16,7 @@ interface Props {
   onRemoveLibraryMaterial: (id: string) => void;
   onSetLibraryMaterialActive: (id: string, active: boolean) => void;
   onSetProjectMaterialOverride: (materialId: string, price: { price: number; priceUnit: string; vatMode: string; supplier?: string }, locked: boolean) => void;
+  onClearProjectMaterialOverride: (materialId: string) => void;
   onExportPricesCsv: () => void;
   onImportPricesCsv: (file: File) => void;
 }
@@ -227,7 +228,19 @@ export function MaterialsPanel(props: Props) {
                           onSetProjectMaterialOverride={props.onSetProjectMaterialOverride}
                         />
                         {line.supplier && <span>· {line.supplier}</span>}
-                        {line.priceIsOverride && <span className="rounded bg-blue-50 px-1 text-blue-700">Låst i projekt</span>}
+                        {line.priceIsOverride && (
+                          <span className="flex items-center gap-1 rounded bg-blue-50 px-1 text-blue-700">
+                            Låst i projekt
+                            <button
+                              type="button"
+                              title="Lås upp — använd biblioteksprisets nuvarande värde igen"
+                              onClick={() => props.onClearProjectMaterialOverride(line.materialId)}
+                              className="underline hover:no-underline"
+                            >
+                              Lås upp
+                            </button>
+                          </span>
+                        )}
                         {line.priceMissing && !line.suppliedByClient && <span className="rounded bg-amber-50 px-1 text-amber-700">Pris saknas</span>}
                       </div>
                       <span className="font-semibold text-slate-800">{formatSek(line.purchaseTotal)}</span>

@@ -30,6 +30,7 @@ interface Props {
   onRemoveLibraryMaterial: (id: string) => void;
   onSetLibraryMaterialActive: (id: string, active: boolean) => void;
   onSetProjectMaterialOverride: (materialId: string, price: { price: number; priceUnit: string; vatMode: string; supplier?: string }, locked: boolean) => void;
+  onClearProjectMaterialOverride: (materialId: string) => void;
   onExportPricesCsv: () => void;
   onImportPricesCsv: (file: File) => void;
 }
@@ -64,6 +65,7 @@ export function RightPanel(props: Props) {
           onRemoveLibraryMaterial={props.onRemoveLibraryMaterial}
           onSetLibraryMaterialActive={props.onSetLibraryMaterialActive}
           onSetProjectMaterialOverride={props.onSetProjectMaterialOverride}
+          onClearProjectMaterialOverride={props.onClearProjectMaterialOverride}
           onExportPricesCsv={props.onExportPricesCsv}
           onImportPricesCsv={props.onImportPricesCsv}
         />

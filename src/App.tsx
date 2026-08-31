@@ -279,6 +279,7 @@ function App() {
           onSetProjectMaterialOverride={(materialId, price, locked) =>
             store.setProjectMaterialOverride(materialId, price as Pick<MaterialPriceModel, "price" | "priceUnit" | "vatMode" | "supplier">, locked)
           }
+          onClearProjectMaterialOverride={store.clearProjectMaterialOverride}
           onExportPricesCsv={() => downloadCsv(`${project.name}-prislista.csv`, materialsToPriceCsv(store.priceLibrary))}
           onImportPricesCsv={async (file) => {
             const text = await file.text();
